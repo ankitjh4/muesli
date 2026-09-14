@@ -34,7 +34,7 @@ enum CompactMeetingFormattingPolicy {
             return !isPreparing
         case .noteOnly:
             return true
-        case .processing, .completed, .failed:
+        case .processing, .completed, .failed, .incomplete:
             return false
         }
     }
@@ -106,6 +106,7 @@ struct MeetingDetailView: View {
     @State private var manualNotesSaveStatusTask: DispatchWorkItem?
     @State private var summaryErrorMessage: String?
     @State private var retranscriptionErrorMessage: String?
+    @State private var showOnlineRetranscriptionConfirmation = false
     @State private var showDeleteConfirmation = false
     @State private var transcriptResummaryPromptMeetingID: Int64?
     @State private var transcriptEditOriginalTranscript: String?
@@ -142,6 +143,18 @@ struct MeetingDetailView: View {
             if let meeting {
                 VStack(alignment: .leading, spacing: 0) {
                     header(meeting)
+
+                    if meeting.status == .incomplete {
+                        Label(meeting.savedRecordingPath == nil
+                            ? "Some audio could not be transcribed. The completed text is kept, but this transcript and its notes may have gaps."
+                            : "Some audio could not be transcribed. Completed text is kept. Review the saved recording or use Re-transcribe; the notes may also have gaps.",
+                              systemImage: "exclamationmark.triangle")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.transcribing)
+                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(MuesliTheme.transcribing.opacity(0.08))
+                    }
 
                     Divider()
                         .background(MuesliTheme.surfaceBorder)
@@ -196,6 +209,14 @@ struct MeetingDetailView: View {
             }
         } message: {
             Text(retranscriptionErrorMessage ?? "The saved recording could not be re-transcribed.")
+        }
+        .alert("Send recording for re-transcription?", isPresented: $showOnlineRetranscriptionConfirmation) {
+            Button("Send recording") {
+                if let meeting { startRetranscription(for: meeting) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The full saved recording will be sent through OpenRouter to your selected meeting model. Provider charges may apply, including for audio sent previously. Your existing transcript is replaced only after transcription succeeds.")
         }
         .alert("Re-summarize Notes?", isPresented: transcriptResummaryPromptBinding) {
             Button("Re-summarize") {
@@ -700,7 +721,7 @@ struct MeetingDetailView: View {
         switch meeting.status {
         case .recording, .processing, .noteOnly, .failed:
             return true
-        case .completed:
+        case .completed, .incomplete:
             return false
         }
     }
@@ -818,7 +839,11 @@ struct MeetingDetailView: View {
                 .padding(.horizontal, MuesliTheme.spacing8)
             } else {
                 iconButton("arrow.clockwise", label: "Re-transcribe") {
-                    startRetranscription(for: meeting)
+                    if appState.config.useOpenRouterForMeetings && !appState.config.offlineInference {
+                        showOnlineRetranscriptionConfirmation = true
+                    } else {
+                        startRetranscription(for: meeting)
+                    }
                 }
                 .disabled(meeting.status == .recording || meeting.status == .processing || isEditingNotes || isEditingTranscript)
             }

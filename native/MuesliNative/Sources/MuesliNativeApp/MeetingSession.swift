@@ -104,6 +104,7 @@ struct MeetingSessionResult {
     let systemRecordingURL: URL?
     let templateSnapshot: MeetingTemplateSnapshot
     var visualContext: String? = nil
+    var transcriptionIncomplete: Bool = false
 }
 
 extension MeetingSessionResult {
@@ -132,7 +133,8 @@ extension MeetingSessionResult {
             retainedRecordingError: retainedRecordingError,
             systemRecordingURL: systemRecordingURL,
             templateSnapshot: templateSnapshot,
-            visualContext: newVisualContext ?? visualContext
+            visualContext: newVisualContext ?? visualContext,
+            transcriptionIncomplete: transcriptionIncomplete
         )
     }
 }
@@ -168,6 +170,12 @@ final class MeetingSession {
     private let backendLock = OSAllocatedUnfairLock(initialState: BackendOption.whisper)
     private let runtime: RuntimePaths
     private let config: AppConfig
+    private let hostedTranscription: OpenRouterDictationConfiguration?
+    var usesHostedTranscription: Bool { hostedTranscription != nil }
+
+    func validateHostedTranscription() throws {
+        if let hostedTranscription { try OpenRouterTranscriptionClient().validateAccess(configuration: hostedTranscription) }
+    }
     private let templateSnapshot: MeetingTemplateSnapshot
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let systemAudioRecorder: SystemAudioCapturing
@@ -262,13 +270,17 @@ final class MeetingSession {
         config: AppConfig,
         templateSnapshot: MeetingTemplateSnapshot,
         transcriptionCoordinator: TranscriptionCoordinator,
-        meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder()
+        meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder(),
+        hostedTranscription: OpenRouterDictationConfiguration? = nil
     ) {
         self.title = title
         self.calendarEventID = calendarEventID
         backendLock.withLock { $0 = backend }
         self.runtime = runtime
-        self.config = config
+        var recordingConfig = config
+        if hostedTranscription != nil { recordingConfig.enableLiveStreamingPartials = false }
+        self.config = recordingConfig
+        self.hostedTranscription = hostedTranscription
         self.templateSnapshot = templateSnapshot
         self.transcriptionCoordinator = transcriptionCoordinator
         self.meetingMicRecorder = meetingMicRecorder
@@ -370,6 +382,7 @@ final class MeetingSession {
 
     func start() async throws {
         try Task.checkCancellation()
+        try validateHostedTranscription()
         guard !captureLifecycle.isEnding else { throw CancellationError() }
         let inputDeviceID = meetingMicRecorder.preferredInputDeviceID
         inputObservationQueue.async { [inputObserver, inputMuted, captureLifecycle] in
@@ -743,6 +756,7 @@ final class MeetingSession {
                     let result = try await transcriptionCoordinator.transcribeMeetingChunk(
                         at: lastSystemChunkURL,
                         backend: currentBackend(),
+                        openRouter: hostedTranscription,
                         cohereLanguage: config.resolvedCohereLanguage,
                         bodhanLanguage: config.resolvedBodhanLanguage,
                         whisperLanguage: config.resolvedWhisperLanguage,
@@ -760,6 +774,11 @@ final class MeetingSession {
                         systemChunkHealthTracker.noteSuccessfulChunk()
                     }
                     systemSegments.append(contentsOf: normalizedSegments)
+                } catch let failure as HostedMeetingAudio.PartialFailure {
+                    systemChunkHealthTracker.noteFailedChunk()
+                    systemSegments.append(contentsOf: normalizeSystemTranscription(result: failure.result,
+                        startTime: chunkOffset, endTime: chunkOffset + failure.completedThrough))
+                    fputs("[meeting] final hosted system chunk retained partial transcript\n", stderr)
                 } catch {
                     systemChunkHealthTracker.noteFailedChunk()
                     fputs("[meeting] final system chunk transcription failed: \(error)\n", stderr)
@@ -922,7 +941,9 @@ final class MeetingSession {
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
             templateSnapshot: templateSnapshot,
-            visualContext: visualContext.isEmpty ? nil : visualContext
+            visualContext: visualContext.isEmpty ? nil : visualContext,
+            transcriptionIncomplete: usesHostedTranscription &&
+                (micChunkHealthTracker.snapshot().failedChunkCount > 0 || systemChunkHealthTracker.snapshot().failedChunkCount > 0)
         )
     }
 
@@ -1050,6 +1071,7 @@ final class MeetingSession {
                     let result = try await self.transcriptionCoordinator.transcribeMeetingChunk(
                         at: chunkURL,
                         backend: backend,
+                        openRouter: self.hostedTranscription,
                         cohereLanguage: config.resolvedCohereLanguage,
                         bodhanLanguage: config.resolvedBodhanLanguage,
                         whisperLanguage: config.resolvedWhisperLanguage,
@@ -1071,6 +1093,10 @@ final class MeetingSession {
                         return normalizedSegments
                     }
                     self.systemChunkHealthTracker.noteEmptyChunk()
+                } catch let failure as HostedMeetingAudio.PartialFailure {
+                    self.systemChunkHealthTracker.noteFailedChunk()
+                    return self.normalizeSystemTranscription(result: failure.result,
+                        startTime: chunkOffset, endTime: chunkOffset + failure.completedThrough)
                 } catch {
                     self.systemChunkHealthTracker.noteFailedChunk()
                     fputs("[meeting] system chunk transcription failed: \(error)\n", stderr)
@@ -1261,6 +1287,7 @@ final class MeetingSession {
             let result = try await transcriptionCoordinator.transcribeMeetingChunk(
                 at: url,
                 backend: currentBackend(),
+                openRouter: hostedTranscription,
                 cohereLanguage: config.resolvedCohereLanguage,
                 bodhanLanguage: config.resolvedBodhanLanguage,
                 whisperLanguage: config.resolvedWhisperLanguage,
@@ -1283,6 +1310,10 @@ final class MeetingSession {
             }
             micChunkHealthTracker.noteEmptyChunk()
             return []
+        } catch let failure as HostedMeetingAudio.PartialFailure {
+            micChunkHealthTracker.noteFailedChunk()
+            return MicTurnNormalizer.normalize(result: failure.result,
+                startTime: chunkOffset, endTime: chunkOffset + failure.completedThrough)
         } catch {
             micChunkHealthTracker.noteFailedChunk()
             fputs("[meeting] mic chunk transcription failed (raw): \(error)\n", stderr)
@@ -1318,6 +1349,9 @@ final class MeetingSession {
         meetingStart: Date,
         endTime: Date
     ) async -> MeetingTranscriptRecoveryResult {
+        // Cloud chunk failures must not silently trigger a second paid upload
+        // of the full meeting. Keep existing segments for explicit recovery.
+        guard hostedTranscription == nil else { return .none }
         let totalDuration = durationSeconds(from: meetingStart, to: endTime)
 
         guard let vadManager = await transcriptionCoordinator.getVadManager() else {

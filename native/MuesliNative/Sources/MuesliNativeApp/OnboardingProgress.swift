@@ -71,7 +71,7 @@ enum OnboardingPermissionGate {
         useCoreAudioTap: Bool = true
     ) -> Int {
         let gatedStep = useCase.includesPushToTalk ? dictationTestStep : permissionsStep + 1
-        if requestedStep >= gatedStep
+        if OnboardingFlow.isStep(requestedStep, atOrAfter: gatedStep)
             && !hasRequiredPermissions(permissions, for: useCase, useCoreAudioTap: useCoreAudioTap) {
             return permissionsStep
         }
@@ -80,18 +80,24 @@ enum OnboardingPermissionGate {
 }
 
 struct OnboardingProgress: Codable {
-    static let currentSchemaVersion = 4
+    static let currentSchemaVersion = 5
 
     var schemaVersion: Int = currentSchemaVersion
     var currentStep: Int
     var userName: String
     var selectedBackendKey: String
     var selectedModelKey: String
+    var selectedMeetingBackendKey: String
+    var selectedMeetingModelKey: String
     var selectedCohereLanguageCode: String
     var hotkeyKeyCode: UInt16
     var hotkeyLabel: String
     var systemAudioRequested: Bool = false
     var onboardingUseCaseRawValue: String = OnboardingUseCase.dictation.rawValue
+    var summaryBackendKey: String = MeetingSummaryBackendOption.chatGPT.backend
+    var quillEnabled: Bool = false
+    var cleanupEnabled: Bool = true
+    var quillBackendKey: String = TranscriptCleanupBackendOption.local.backend
     var modelDownloadProgress: Double?
     var modelDownloadStatus: String?
 
@@ -101,11 +107,17 @@ struct OnboardingProgress: Codable {
         userName: String,
         selectedBackendKey: String,
         selectedModelKey: String,
+        selectedMeetingBackendKey: String? = nil,
+        selectedMeetingModelKey: String? = nil,
         selectedCohereLanguageCode: String = CohereTranscribeLanguage.defaultLanguage.rawValue,
         hotkeyKeyCode: UInt16,
         hotkeyLabel: String,
         systemAudioRequested: Bool = false,
         onboardingUseCaseRawValue: String = OnboardingUseCase.dictation.rawValue,
+        summaryBackendKey: String = MeetingSummaryBackendOption.chatGPT.backend,
+        quillEnabled: Bool = false,
+        cleanupEnabled: Bool = true,
+        quillBackendKey: String = TranscriptCleanupBackendOption.local.backend,
         modelDownloadProgress: Double? = nil,
         modelDownloadStatus: String? = nil
     ) {
@@ -114,11 +126,17 @@ struct OnboardingProgress: Codable {
         self.userName = userName
         self.selectedBackendKey = selectedBackendKey
         self.selectedModelKey = selectedModelKey
+        self.selectedMeetingBackendKey = selectedMeetingBackendKey ?? selectedBackendKey
+        self.selectedMeetingModelKey = selectedMeetingModelKey ?? selectedModelKey
         self.selectedCohereLanguageCode = CohereTranscribeLanguage.resolvedCode(selectedCohereLanguageCode)
         self.hotkeyKeyCode = hotkeyKeyCode
         self.hotkeyLabel = hotkeyLabel
         self.systemAudioRequested = systemAudioRequested
         self.onboardingUseCaseRawValue = OnboardingUseCase.resolved(onboardingUseCaseRawValue).rawValue
+        self.summaryBackendKey = MeetingSummaryBackendOption.resolved(summaryBackendKey).backend
+        self.quillEnabled = quillEnabled
+        self.cleanupEnabled = cleanupEnabled
+        self.quillBackendKey = TranscriptCleanupBackendOption.resolved(quillBackendKey).backend
         self.modelDownloadProgress = modelDownloadProgress
         self.modelDownloadStatus = modelDownloadStatus
     }
@@ -130,6 +148,10 @@ struct OnboardingProgress: Codable {
         userName = try c.decode(String.self, forKey: .userName)
         selectedBackendKey = try c.decode(String.self, forKey: .selectedBackendKey)
         selectedModelKey = try c.decode(String.self, forKey: .selectedModelKey)
+        selectedMeetingBackendKey = try c.decodeIfPresent(String.self, forKey: .selectedMeetingBackendKey)
+            ?? selectedBackendKey
+        selectedMeetingModelKey = try c.decodeIfPresent(String.self, forKey: .selectedMeetingModelKey)
+            ?? selectedModelKey
         selectedCohereLanguageCode = CohereTranscribeLanguage.resolvedCode(
             try c.decodeIfPresent(String.self, forKey: .selectedCohereLanguageCode)
         )
@@ -139,6 +161,14 @@ struct OnboardingProgress: Codable {
         onboardingUseCaseRawValue = OnboardingUseCase.resolved(
             try c.decodeIfPresent(String.self, forKey: .onboardingUseCaseRawValue)
         ).rawValue
+        summaryBackendKey = MeetingSummaryBackendOption.resolved(
+            try c.decodeIfPresent(String.self, forKey: .summaryBackendKey)
+        ).backend
+        quillEnabled = try c.decodeIfPresent(Bool.self, forKey: .quillEnabled) ?? false
+        cleanupEnabled = try c.decodeIfPresent(Bool.self, forKey: .cleanupEnabled) ?? true
+        quillBackendKey = TranscriptCleanupBackendOption.resolved(
+            try c.decodeIfPresent(String.self, forKey: .quillBackendKey)
+        ).backend
         modelDownloadProgress = try c.decodeIfPresent(Double.self, forKey: .modelDownloadProgress)
         modelDownloadStatus = try c.decodeIfPresent(String.self, forKey: .modelDownloadStatus)
     }

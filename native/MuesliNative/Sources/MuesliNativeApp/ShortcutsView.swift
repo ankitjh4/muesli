@@ -13,6 +13,8 @@ struct ShortcutsView: View {
     @State private var computerUseShortcutMessage: String?
     @State private var quilShortcutMessage: String?
     @State private var meetingRecordingShortcutMessage: String?
+    @State private var inferenceModeMessage: String?
+    @State private var preparingWhisper = false
 
     var body: some View {
         ScrollView {
@@ -21,9 +23,11 @@ struct ShortcutsView: View {
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text("Choose your preferred shortcuts for dictation and computer use commands.")
+                Text("Choose shortcuts for dictation, Quill, meetings, and model modes.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
+
+                inferenceModeSection
 
                 dictationShortcutSection
 
@@ -56,6 +60,83 @@ struct ShortcutsView: View {
             controller.endInteractionPermissionMonitoring(clientID: permissionMonitoringClientID)
             stopRecording()
         }
+    }
+
+    private var inferenceModeSection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            Text("Online and offline models").font(MuesliTheme.headline())
+            Label(appState.config.offlineInference ? "Current: Offline models (preview)" : "Current: Online / mixed models",
+                  systemImage: appState.config.offlineInference ? "internaldrive" : "network")
+                .font(MuesliTheme.body())
+            Text("Offline uses downloaded speech and language models. Online / mixed restores your saved choices and allows hosted models; it does not force every task online.")
+                .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack { inferenceModeButtons }
+                VStack(alignment: .leading) { inferenceModeButtons }
+            }
+            if controller.selectedBackend.backend == "whisper" && !appState.config.offlineInference {
+                Text("Whisper also needs small text-decoding files. Prepare them before disconnecting; this checks the tokenizer without recording audio.")
+                    .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                Button(preparingWhisper ? "Preparing Whisper…" : "Prepare Whisper for offline use") {
+                    let model = controller.selectedBackend.model
+                    preparingWhisper = true
+                    inferenceModeMessage = nil
+                    Task { @MainActor in
+                        defer { preparingWhisper = false }
+                        do {
+                            try await ManagedWhisperKit.prepareTokenizer(modelName: model)
+                            inferenceModeMessage = "Whisper text-decoding files are ready. Speech weights and a local cleanup model are still required."
+                        } catch {
+                            inferenceModeMessage = "Could not prepare Whisper: \(error.localizedDescription)"
+                        }
+                    }
+                }
+                .disabled(preparingWhisper)
+            }
+            if let inferenceModeMessage {
+                Text(inferenceModeMessage).font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.transcribing)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Divider()
+            if !AppIdentity.hasSigningTeam {
+                Text("Apple Shortcuts actions cannot run in this ad-hoc development build. Rebuild with an Apple signing identity containing a Team ID to enable them. The mode buttons above and in the menu bar still work.")
+                    .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.transcribing)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+            Text("In Apple Shortcuts, add a Muesli+ action named “Use Offline Models” or “Allow Online Models”. Save each as a shortcut to run from Spotlight, the menu bar, or a keyboard shortcut.")
+                .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open Apple Shortcuts") {
+                guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.shortcuts") else {
+                    inferenceModeMessage = "Apple Shortcuts could not be found on this Mac. You can still switch modes here or from the menu bar."
+                    return
+                }
+                NSWorkspace.shared.open(url)
+            }
+            }
+            Text("Preview: computer-use planning is unavailable offline. This controls Muesli+ services, not network access for other apps.")
+                .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(MuesliTheme.spacing16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+    }
+
+    @ViewBuilder private var inferenceModeButtons: some View {
+        Button("Use Offline Models") { switchInferenceMode(offline: true) }
+            .disabled(appState.config.offlineInference || preparingWhisper)
+        Button("Allow Online Models") { switchInferenceMode(offline: false) }
+            .disabled(!appState.config.offlineInference)
+    }
+
+    private func switchInferenceMode(offline: Bool) {
+        inferenceModeMessage = nil
+        do { _ = try controller.setOfflineInferenceForShortcuts(offline) }
+        catch { inferenceModeMessage = error.localizedDescription }
     }
 
     private var isPushToTalkEnabled: Bool {

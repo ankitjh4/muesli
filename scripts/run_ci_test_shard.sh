@@ -31,6 +31,7 @@ case "${shard}" in
       DictationTestLifecycleTests
       OnboardingFlowTests
       OnboardingProgressTests
+      OnboardingCleanupSetupTests
       FloatingIndicatorVisibilityTests
       IndicatorFrameSizeTests
       WindowAppearanceTests
@@ -48,6 +49,16 @@ case "${shard}" in
       BodhanLifecycleTests
       DictationBackendPreparationTests
       ContributionMilestoneTests
+      CleanupDefaultsTests
+      FrequentVocabularyTests
+      HomeDashboardTests
+      InferenceRoutingTests
+      MuesliColorThemeTests
+      OnlineDictationSetupTests
+      ProfessionVocabularyTests
+      ProfessionVocabularyModelTests
+      SettingsLayoutTests
+      TelemetryNetworkGateTests
     )
     ;;
   dictation-transcription)
@@ -94,6 +105,12 @@ case "${shard}" in
       DictationStateIdleTests
       DictationCorrectionMonitorTests
       Nemotron35ModelStoreTests
+      HindiRomanizationTests
+      HindiRomanizationModelTests
+      HinglishAudioPipelineTests
+      LipDictationTests
+      LocalSpeechHelperLoaderTests
+      QuilAppStyleTests
     )
     ;;
   meetings)
@@ -138,6 +155,8 @@ case "${shard}" in
       CalendarMonitorLifecycleTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
+      LocalMeetingSummaryTests
+      LocalMeetingSummaryModelTests
     )
     ;;
   *)

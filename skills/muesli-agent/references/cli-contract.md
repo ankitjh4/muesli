@@ -1,4 +1,4 @@
-# Muesli CLI Contract
+# Muesli+ CLI Contract
 
 ## Commands
 
@@ -24,7 +24,7 @@ Success envelope:
   "meta": {
     "schemaVersion": 1,
     "generatedAt": "2026-03-17T00:00:00Z",
-    "dbPath": "/Users/example/Library/Application Support/Muesli/muesli.db",
+    "dbPath": "/Users/example/Library/Application Support/Muesli+/muesli.db",
     "warnings": []
   }
 }
@@ -111,7 +111,7 @@ Transcribe behavior:
 
 - `transcribe <file>` for raw local transcription
 - `transcribe <file> --format json` when structured metadata is needed
-- `transcribe <file> --save-meeting` when the imported audio should appear in Muesli
+- `transcribe <file> --save-meeting` when the imported audio should appear in Muesli+
 - `list` to discover IDs
 - `get` to fetch full text
 - external summarize/analyze in the coding agent

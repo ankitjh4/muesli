@@ -10,6 +10,7 @@ public enum MeetingStatus: String, Codable, Sendable {
     case recording
     case processing
     case completed
+    case incomplete
     case noteOnly = "note_only"
     case failed
 }

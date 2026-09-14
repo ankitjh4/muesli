@@ -9,7 +9,7 @@ enum ContributionMilestoneAction: String, CaseIterable {
     var supportURL: URL? {
         switch self {
         case .githubStar:
-            return URL(string: "https://github.com/Muesli-HQ/muesli")!
+            return URL(string: "https://github.com/ankitjh4/muesli")!
         case .buyMeCoffee:
             return URL(string: "https://buymeacoffee.com/phequals7")!
         case .tweetAboutMuesli, .postOnLinkedIn:
@@ -46,17 +46,17 @@ struct ContributionMilestonePrompt: Equatable, Identifiable {
         switch kind {
         case .dictationWords:
             if !showGitHubStar && !showBuyMeCoffee && (showTweetAboutMuesli || showPostOnLinkedIn) {
-                return "That is a serious pile of words. If Muesli has been saving your fingers and your flow, sharing your milestone helps more people find it."
+                return "That is a serious pile of words. If Muesli+ has been saving your fingers and your flow, sharing your milestone helps more people find it."
             }
-            return "That is a serious pile of words. If Muesli has been saving your fingers and your flow, a GitHub star or a coffee helps keep it moving."
+            return "That is a serious pile of words. If Muesli+ has been saving your fingers and your flow, a GitHub star or a coffee helps keep it moving."
         case .meetings:
-            return "That is a lot of conversations turned into something useful. If Muesli has been keeping your meetings in order, a GitHub star or a coffee helps keep it moving."
+            return "That is a lot of conversations turned into something useful. If Muesli+ has been keeping your meetings in order, a GitHub star or a coffee helps keep it moving."
         }
     }
 }
 
 enum ContributionSocialShare {
-    static let muesliURL = URL(string: "https://muesli.works")!
+    static let muesliURL = URL(string: "https://github.com/ankitjh4/muesli")!
 
     static func completedWordMilestone(totalWords: Int) -> Int? {
         let clampedTotal = max(totalWords, 0)
@@ -65,7 +65,7 @@ enum ContributionSocialShare {
     }
 
     static func message(wordCount: Int) -> String {
-        "I've dictated \(formatCount(wordCount)) words with Muesli. It's fast, open source, on-device, and free to use. Try it: \(muesliURL.absoluteString)"
+        "I've dictated \(formatCount(wordCount)) words with Muesli+. It's fast, open source, on-device, and free to use. Try it: \(muesliURL.absoluteString)"
     }
 
     static func tweetURL(wordCount: Int) -> URL {

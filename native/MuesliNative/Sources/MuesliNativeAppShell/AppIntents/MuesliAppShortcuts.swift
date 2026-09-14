@@ -3,6 +3,8 @@ import AppIntents
 @available(macOS 13.0, *)
 struct MuesliAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        AppShortcut(intent: UseOfflineModelsIntent(), phrases: ["Use offline models in \(.applicationName)"], shortTitle: "Offline Models", systemImageName: "laptopcomputer")
+        AppShortcut(intent: AllowOnlineModelsIntent(), phrases: ["Allow online models in \(.applicationName)"], shortTitle: "Online Models", systemImageName: "network")
         AppShortcut(
             intent: StartDictationIntent(),
             phrases: ["Start dictation in \(.applicationName)"],

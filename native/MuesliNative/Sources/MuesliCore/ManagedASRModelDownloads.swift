@@ -1,6 +1,6 @@
 import Foundation
 
-/// A third-party ASR model whose transport is owned by Muesli.
+/// A third-party ASR model whose transport is owned by Muesli+.
 public struct ManagedASRModelPlan: Sendable {
     private struct CompletionMarker: Codable {
         struct File: Codable {
@@ -23,7 +23,7 @@ public struct ManagedASRModelPlan: Sendable {
     public let revision: String
     public let cacheDirectory: URL
     public let selections: [HuggingFaceModelSelection]
-    /// Optional immutable Muesli mirror used before Hugging Face discovery.
+    /// Optional immutable Muesli+ mirror used before Hugging Face discovery.
     public let mirror: MuesliModelMirror?
     /// Every inner group is an either/or requirement; every group must be satisfied.
     public let requiredArtifactAlternatives: [[String]]
@@ -68,7 +68,7 @@ public struct ManagedASRModelPlan: Sendable {
     }
 
     /// True for either a marker-validated managed download or a complete cache
-    /// created by a Muesli version that predates managed completion markers.
+    /// created by a Muesli+ version that predates managed completion markers.
     /// Legacy recognition is refused when resumable state or partial files are
     /// present, so interrupted managed downloads cannot masquerade as installs.
     public func isAvailableLocally(fileManager: FileManager = .default) -> Bool {
@@ -205,6 +205,12 @@ public struct ManagedASRModelPlan: Sendable {
 public enum ManagedASRModelPlans {
     private static let fluidAudioRootRelativePath = "Library/Application Support/FluidAudio/Models"
 
+    /// WhisperKit conversion of Oriserve's Hindi/Hinglish checkpoint. The
+    /// checkpoint emits Romanized Hindi while preserving spoken English.
+    public static let hinglishWhisperKitModelName = "Oriserve_Whisper-Hindi2Hinglish-Apex"
+    public static let hinglishWhisperKitRepository = "shrimalmadhur/whisperkit-hinglish"
+    public static let hinglishWhisperKitRevision = "918fdea849d10e21ad2eff86d255e337afe2b1dc"
+
     public static func fluidAudioModelsRoot(fileManager: FileManager = .default) -> URL {
         fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(fluidAudioRootRelativePath, isDirectory: true)
@@ -332,24 +338,34 @@ public enum ManagedASRModelPlans {
         modelName: String,
         downloadRoot: URL? = nil
     ) -> ManagedASRModelPlan {
-        let fullName = modelName.hasPrefix("openai_whisper-") ? modelName : "openai_whisper-\(modelName)"
-        let root = downloadRoot ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/huggingface/models/argmaxinc/whisperkit-coreml", isDirectory: true)
-        let directory = root.appendingPathComponent(fullName, isDirectory: true)
+        let isHinglish = modelName == hinglishWhisperKitModelName
+        let remoteDirectory = isHinglish
+            ? hinglishWhisperKitModelName
+            : (modelName.hasPrefix("openai_whisper-") ? modelName : "openai_whisper-\(modelName)")
+        let defaultRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                isHinglish
+                    ? "Documents/huggingface/models/shrimalmadhur/whisperkit-hinglish"
+                    : "Documents/huggingface/models/argmaxinc/whisperkit-coreml",
+                isDirectory: true
+            )
+        let root = downloadRoot ?? defaultRoot
+        let directory = root.appendingPathComponent(remoteDirectory, isDirectory: true)
         let requiredModels = [
             "MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc",
         ]
         let requiredFiles = requiredModels + ["config.json", "generation_config.json"]
         return ManagedASRModelPlan(
             modelID: modelName,
-            repository: "argmaxinc/whisperkit-coreml",
+            repository: isHinglish ? hinglishWhisperKitRepository : "argmaxinc/whisperkit-coreml",
+            revision: isHinglish ? hinglishWhisperKitRevision : "main",
             cacheDirectory: directory,
             selections: [HuggingFaceModelSelection(
-                remoteDirectory: fullName,
+                remoteDirectory: remoteDirectory,
                 includedPaths: Set(requiredFiles)
             )],
             requiredArtifactAlternatives: completenessRequirements(for: requiredFiles),
-            mirror: whisperKitMirror(fullName: fullName)
+            mirror: isHinglish ? nil : whisperKitMirror(fullName: remoteDirectory)
         )
     }
 
@@ -357,7 +373,7 @@ public enum ManagedASRModelPlans {
         MuesliModelMirror(manifestURL: URL(string: "https://assets.muesli.works/\(path)")!)
     }
 
-    /// Only variants that Muesli has copied and checksum-pinned in R2 are
+    /// Only variants that Muesli+ has copied and checksum-pinned in R2 are
     /// eligible for the first-party transport. Unknown WhisperKit paths keep
     /// using the normal Hugging Face discovery flow.
     private static func whisperKitMirror(fullName: String) -> MuesliModelMirror? {
@@ -445,6 +461,7 @@ public enum ManagedASRModelDownloader {
         resolver: HuggingFaceModelManifestResolver = .shared,
         mirrorResolver: MuesliModelMirrorManifestResolver = .shared,
         coordinator: ModelDownloadCoordinator = .shared,
+        networkPolicy: ModelNetworkPolicy = .shared,
         load: (URL) async throws -> T
     ) async throws -> T {
         let requiresRuntimeValidation = plan.requiresRuntimeValidation()
@@ -463,7 +480,7 @@ public enum ManagedASRModelDownloader {
             return value
         } catch {
             let validationError = error
-            guard requiresRuntimeValidation, !(error is CancellationError) else { throw error }
+            guard requiresRuntimeValidation, !(error is CancellationError), networkPolicy.isAllowed else { throw error }
             try Task.checkCancellation()
 
             let deletionToken = await beginDeletion(
@@ -472,6 +489,9 @@ public enum ManagedASRModelDownloader {
             )
             let shouldRepair = plan.requiresRuntimeValidation()
             do {
+                // A model load error is not permission to destroy the user's
+                // only cached copy when a replacement cannot be downloaded.
+                guard networkPolicy.isAllowed else { throw validationError }
                 if shouldRepair { try plan.delete() }
             } catch {
                 await endDeletion(deletionToken)
@@ -571,7 +591,7 @@ public enum ManagedASRModelDownloader {
         var fallbackCacheBackup: URL?
         if let mirror = plan.mirror {
             do {
-                report("Checking Muesli model mirror...")
+                report("Checking Muesli+ model mirror...")
                 let manifest = try await mirrorResolver.resolve(
                     modelID: plan.modelID,
                     mirror: mirror,
@@ -590,6 +610,9 @@ public enum ManagedASRModelDownloader {
                 return plan.cacheDirectory
             } catch {
                 if isCancellation(error) || cancellation.isCancelled { throw CancellationError() }
+                // Offline is a deliberate boundary, not a broken mirror. Keep
+                // partial/cache files in place and do not initiate fallback.
+                if error is ModelNetworkPolicy.OfflineError { throw error }
                 if mirrorTransferStarted {
                     // Download the fallback into a new directory so it cannot
                     // resume mirror bytes or stale partial files. Keep the
@@ -598,7 +621,7 @@ public enum ManagedASRModelDownloader {
                     // Hugging Face is unavailable too.
                     fallbackCacheBackup = try moveCacheAside(plan.cacheDirectory)
                 }
-                report("Muesli mirror unavailable; trying Hugging Face...")
+                report("Muesli+ mirror unavailable; trying Hugging Face...")
             }
         } else {
             report("Finding model files...")

@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import CoreAudio
+import MuesliCore
 @testable import MuesliNativeApp
 
 @Suite("StreamingDictationController")
@@ -1000,5 +1001,13 @@ struct WhisperKitLanguageTests {
         #expect(WhisperKitLanguage.preferenceForLoadedModel(.auto, modelName: "small") == .auto)
         #expect(WhisperKitLanguage.preferenceForLoadedModel(.german, modelName: "large-v3-v20240930_626MB") == .german)
         #expect(WhisperKitLanguage.preferenceForLoadedModel(.auto, modelName: "large-v3-v20240930_626MB") == .auto)
+        #expect(WhisperKitLanguage.preferenceForLoadedModel(
+            .auto,
+            modelName: ManagedASRModelPlans.hinglishWhisperKitModelName
+        ) == .english)
+        #expect(WhisperKitLanguage.preferenceForLoadedModel(
+            .hindi,
+            modelName: ManagedASRModelPlans.hinglishWhisperKitModelName
+        ) == .english)
     }
 }

@@ -22,11 +22,22 @@ struct DictionaryView: View {
     @State private var isShowingAccessibilityPrompt = false
     @State private var suggestionPage = 0
     @State private var dictionaryAlertMessage: String?
+    @State private var frequentWords: [FrequentVocabulary.Candidate] = []
+    @State private var hasScannedVocabulary = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
                 header
+                Toggle("Automatically save detected spelling corrections", isOn: Binding(
+                    get: { appState.config.automaticallySaveDictionaryCorrections },
+                    set: { enabled in controller.updateConfig { $0.automaticallySaveDictionaryCorrections = enabled } }
+                ))
+                .disabled(!appState.config.enableDictionaryCorrectionPrompts)
+                Text("Enable Dictionary suggestions above to watch for edits after dictation. Automatic saving adds detected corrections to the dictionary without asking each time. Review or remove any learned entry below; leave this off to approve each correction first.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                frequentVocabularySection
                 if !appState.config.dictionarySuggestions.isEmpty {
                     suggestionList
                 }
@@ -49,7 +60,7 @@ struct DictionaryView: View {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }
         } message: {
-            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Muesli to turn suggestions on.")
+            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Muesli+ to turn suggestions on.")
         }
         .alert(
             "Dictionary",
@@ -147,6 +158,52 @@ struct DictionaryView: View {
         }
     }
 
+    private var frequentVocabularySection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack {
+                Text("Words you use often").font(MuesliTheme.headline())
+                Spacer()
+                Button("Find frequent words") {
+                    do {
+                        frequentWords = try controller.frequentVocabularySuggestions()
+                        hasScannedVocabulary = true
+                    } catch {
+                        dictionaryAlertMessage = "Could not read dictation history: \(error.localizedDescription)"
+                    }
+                }
+            }
+            Text("Scans your latest 1,000 history entries on this Mac. Words must occur in at least three dictations. Review the spelling before saving: repeated transcription errors can also appear here.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+            if hasScannedVocabulary && frequentWords.isEmpty {
+                Text("No new frequent words yet. Try again after a few more dictations.")
+                    .font(MuesliTheme.body())
+            }
+            ForEach(frequentWords) { candidate in
+                HStack {
+                    Text(candidate.word).font(MuesliTheme.body())
+                    Text("\(candidate.dictationCount) dictations")
+                        .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                    Spacer()
+                    Button("Review spelling") {
+                        newWord = candidate.word
+                        newReplacement = candidate.word
+                        isAdding = true
+                    }
+                    Button("Save word") {
+                        if !appState.config.customWords.contains(where: { $0.targetWord.lowercased() == candidate.word.lowercased() }) {
+                            controller.addCustomWord(CustomWord(word: candidate.word, replacement: candidate.word))
+                        }
+                        frequentWords.removeAll { $0.id == candidate.id }
+                    }
+                }
+            }
+        }
+        .padding(MuesliTheme.spacing16)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+    }
+
     private func handleDictionaryCorrectionPromptsToggle(_ enabled: Bool) {
         if controller.setDictionaryCorrectionPromptsFromToggle(enabled) == .needsAccessibilityPermission {
             isShowingAccessibilityPrompt = true
@@ -155,7 +212,7 @@ struct DictionaryView: View {
 
     private func importDictionary() {
         let panel = NSOpenPanel()
-        panel.title = "Import Muesli Dictionary"
+        panel.title = "Import Muesli+ Dictionary"
         panel.message = "Choose a JSON dictionary file"
         panel.prompt = "Import"
         panel.allowedContentTypes = [.json]
@@ -193,7 +250,7 @@ struct DictionaryView: View {
 
     private func exportDictionary() {
         let panel = NSSavePanel()
-        panel.title = "Export Muesli Dictionary"
+        panel.title = "Export Muesli+ Dictionary"
         panel.prompt = "Export"
         panel.nameFieldStringValue = "muesli-dictionary.json"
         panel.allowedContentTypes = [.json]
@@ -232,7 +289,7 @@ struct DictionaryView: View {
                     Text("Suggested Corrections")
                         .font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("Corrections Muesli noticed by briefly reading focused app text after dictation.")
+                    Text("Corrections Muesli+ noticed by briefly reading focused app text after dictation.")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }

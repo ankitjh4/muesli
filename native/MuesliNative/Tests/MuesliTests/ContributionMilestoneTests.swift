@@ -301,7 +301,7 @@ struct ContributionMilestoneTests {
     @Test("share message and URLs include encoded milestone content")
     func shareMessageAndURLs() throws {
         let message = ContributionSocialShare.message(wordCount: 31_000)
-        #expect(message == "I've dictated 31,000 words with Muesli. It's fast, open source, on-device, and free to use. Try it: https://muesli.works")
+        #expect(message == "I've dictated 31,000 words with Muesli+. It's fast, open source, on-device, and free to use. Try it: https://github.com/ankitjh4/muesli")
 
         let tweetURL = ContributionSocialShare.tweetURL(wordCount: 31_000)
         #expect(tweetURL.absoluteString.starts(with: "https://x.com/intent/tweet?text="))
@@ -316,8 +316,8 @@ struct ContributionMilestoneTests {
         #expect(components.path == "/feed/")
         #expect(queryItems["shareActive"] == "true")
         #expect(queryItems["text"] == message)
-        #expect(queryItems["url"] == "https://muesli.works")
-        #expect(queryItems["shareUrl"] == "https://muesli.works")
+        #expect(queryItems["url"] == "https://github.com/ankitjh4/muesli")
+        #expect(queryItems["shareUrl"] == "https://github.com/ankitjh4/muesli")
         #expect(queryItems["linkOrigin"] == "LI_BADGE")
     }
 

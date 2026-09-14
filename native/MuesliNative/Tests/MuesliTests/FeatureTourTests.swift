@@ -185,7 +185,9 @@ struct FeatureTourTests {
         ])
 
         let quill = tour.steps[0]
-        #expect(quill.message.contains("Gemma 4"))
+        #expect(quill.message.contains("Qwen"))
+        #expect(quill.message.contains("OpenRouter"))
+        #expect(quill.message.contains("on-device editing"))
 
         let shortcuts = tour.steps[1]
         #expect(shortcuts.target == nil)
@@ -201,7 +203,7 @@ struct FeatureTourTests {
         #expect(!hostedDictation.message.localizedCaseInsensitiveContains("meeting"))
 
         let parakeet = tour.steps[3]
-        #expect(parakeet.title == "Meet the best English STT model")
+        #expect(parakeet.title == "Meet the recommended English speech model")
         #expect(parakeet.message.contains("balances speed and accuracy"))
         #expect(!parakeet.title.localizedCaseInsensitiveContains("our best"))
         #expect(!parakeet.message.localizedCaseInsensitiveContains("our best"))

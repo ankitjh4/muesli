@@ -60,8 +60,10 @@ public final class HuggingFaceModelManifestResolver: @unchecked Sendable {
     public static let shared = HuggingFaceModelManifestResolver()
 
     private let session: URLSession
+    private let networkPolicy: ModelNetworkPolicy
 
-    public init(configuration: URLSessionConfiguration = .default) {
+    public init(configuration: URLSessionConfiguration = .default, networkPolicy: ModelNetworkPolicy = .shared) {
+        self.networkPolicy = networkPolicy
         let configuration = configuration.copy() as? URLSessionConfiguration ?? configuration
         configuration.timeoutIntervalForRequest = max(configuration.timeoutIntervalForRequest, 60)
         configuration.timeoutIntervalForResource = max(configuration.timeoutIntervalForResource, 180)
@@ -182,7 +184,7 @@ public final class HuggingFaceModelManifestResolver: @unchecked Sendable {
                    Self.isTrustedHuggingFaceURL(url) {
                     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 }
-                let result = try await session.data(for: request)
+                let result = try await networkPolicy.data(for: request, session: session)
                 // URLSession can complete successfully in the narrow window
                 // after its parent task is cancelled. Do not turn that late
                 // discovery response into a new file transfer.
@@ -196,6 +198,8 @@ public final class HuggingFaceModelManifestResolver: @unchecked Sendable {
                 return result
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let error as ModelNetworkPolicy.OfflineError {
+                throw error
             } catch {
                 lastError = error
                 guard attempt < 2 else { throw error }

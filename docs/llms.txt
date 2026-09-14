@@ -1,8 +1,8 @@
-# Muesli
+# Muesli+
 
 > Local-first AI dictation and meeting transcriber for macOS.
 
-Muesli is a free, open-source macOS application that provides hold-to-talk dictation and meeting transcription powered by on-device AI inference. Speech-to-text runs locally on Apple Silicon by default, with optional hosted dictation providers. No cloud is required for core functionality.
+Muesli+ is a free, open-source macOS application that provides hold-to-talk dictation and meeting transcription powered by on-device AI inference. Speech-to-text runs locally on Apple Silicon by default, with optional hosted dictation providers. No cloud is required for core functionality.
 
 ## Features
 
@@ -17,21 +17,21 @@ Muesli is a free, open-source macOS application that provides hold-to-talk dicta
 
 - **Runtime**: Native Swift/AppKit application (not Electron)
 - **Speech Engine**: Fluid Audio SDK (CoreML, Apple Neural Engine)
-- **Storage**: Local SQLite database at ~/Library/Application Support/Muesli/
+- **Storage**: Local SQLite database at ~/Library/Application Support/Muesli+/
 - **Audio Capture**: AVAudioRecorder (mic), AudioHardwareCreateProcessTap (system audio)
 - **Platform**: macOS 14.2+ on Apple Silicon (M1/M2/M3/M4)
 
 ## Links
 
 - Website: https://freedspeech.xyz
-- GitHub: https://github.com/Muesli-HQ/muesli
-- Download: https://github.com/Muesli-HQ/muesli/releases/download/v0.8.4/Muesli-0.8.4.dmg
+- GitHub: https://github.com/ankitjh4/muesli
+- Download: https://github.com/ankitjh4/muesli/releases/download/v0.8.4/Muesli+-0.8.4.dmg
 - Support: https://buymeacoffee.com/phequals7
 - License: MIT
 
 ## Architecture
 
-Muesli is a menu bar app with two modes:
+Muesli+ is a menu bar app with two modes:
 
 1. **Dictation Mode**: User holds Left Cmd key → mic records → on release, audio is transcribed locally by default or by the selected hosted provider → text is pasted at the active cursor position via accessibility APIs.
 

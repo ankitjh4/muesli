@@ -24,7 +24,7 @@ public enum MuesliQwen3AsrVariant: String, CaseIterable, Sendable {
     /// Int8 quantized weights. Half the RAM (~900 MB), same quality.
     case int8
 
-    /// On-disk cache folder name (matches the layout Muesli's managed downloader uses).
+    /// On-disk cache folder name (matches the layout Muesli+'s managed downloader uses).
     public var folderName: String {
         switch self {
         case .f32: return "qwen3-asr-0.6b/f32"
@@ -116,7 +116,7 @@ public struct MuesliQwen3AsrModels: Sendable {
         return try await load(from: targetDir, computeUnits: computeUnits)
     }
 
-    /// Download Qwen3-ASR models through Muesli's managed model downloader.
+    /// Download Qwen3-ASR models through Muesli+'s managed model downloader.
     ///
     /// - Parameters:
     ///   - variant: Model variant to download (`.int8` managed; `.f32` unsupported).

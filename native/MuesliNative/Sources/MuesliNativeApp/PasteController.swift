@@ -126,7 +126,7 @@ enum PasteController {
 
             if requireStagedClipboardOwnership {
                 guard didStageText else {
-                    // Restore only when Muesli still owns the cleared pasteboard. If another
+                    // Restore only when Muesli+ still owns the cleared pasteboard. If another
                     // app wrote to it, preserving that newer content takes precedence.
                     if pasteboard.changeCount == clearedChangeCount {
                         restoreClipboard(pasteboard, from: savedItems)

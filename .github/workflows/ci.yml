@@ -205,8 +205,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify Sparkle update metadata
-        run: ./scripts/verify_update_flow.sh --skip-dmg
+      # This checked-in feed contains signed historical upstream artifacts.
+      # Do not rename their URLs to Muesli+: fork builds have no feed by default.
+      - name: Verify historical upstream Sparkle metadata
+        run: ./scripts/verify_update_flow.sh --skip-dmg --app-name Muesli
 
       - name: Test CloudKit release entitlement contract
         run: python3 ./scripts/test_verify_cloud_entitlements.py

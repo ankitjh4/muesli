@@ -4,7 +4,17 @@ import Testing
 
 @Suite("OnboardingFlow")
 struct OnboardingFlowTests {
-    @Test("Restored supported models outside onboarding must be reconfirmed", arguments: [2, 3, 4, 5, 6])
+    @Test func dashboardExplorationDoesNotRequireRecordingPermission() {
+        #expect(OnboardingFlow.launchDestination(completedSetup: true, recordingPermissionsReady: false, openDashboard: false) == .dashboard)
+        #expect(OnboardingFlow.launchDestination(completedSetup: false, recordingPermissionsReady: false, openDashboard: true) == .setup)
+        #expect(OnboardingFlow.launchDestination(completedSetup: true, recordingPermissionsReady: true, openDashboard: false) == .background)
+        #expect(OnboardingFlow.launchDestination(completedSetup: true, recordingPermissionsReady: true, openDashboard: true) == .dashboard)
+        let denied = OnboardingPermissionSnapshot(microphone: false, accessibility: false, inputMonitoring: false, systemAudio: false, screenRecording: false)
+        #expect(!OnboardingPermissionGate.hasRequiredDictationPermissions(denied))
+        #expect(!OnboardingPermissionGate.hasRequiredMeetingPermissions(denied))
+    }
+
+    @Test("Restored supported models outside onboarding must be reconfirmed", arguments: [2, 3, 4, 5, 6, 7, 9, 10, 11])
     func replacedModelReturnsToSelection(_ requestedStep: Int) {
         let version = OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0)
         let initial = BackendOption.gemma4E2BLiteRT
@@ -17,7 +27,7 @@ struct OnboardingFlowTests {
         ) == 1)
     }
 
-    @Test("Unchanged supported onboarding models preserve the permission-gated step", arguments: [0, 1, 2, 3, 4, 5, 6])
+    @Test("Unchanged supported onboarding models preserve the permission-gated step", arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
     func unchangedModelPreservesResumeStep(_ requestedStep: Int) {
         let version = OperatingSystemVersion(majorVersion: 14, minorVersion: 8, patchVersion: 0)
         let initial = BackendOption.parakeetUnified
@@ -28,7 +38,7 @@ struct OnboardingFlowTests {
         ) == requestedStep)
     }
 
-    @Test("OS-incompatible restored models return to selection without skipping welcome", arguments: [0, 1, 3, 4])
+    @Test("OS-incompatible restored models return to selection without skipping welcome", arguments: [0, 1, 3, 4, 7])
     func incompatibleModelRespectsEarlierSteps(_ requestedStep: Int) {
         let version = OperatingSystemVersion(majorVersion: 14, minorVersion: 8, patchVersion: 0)
         let initial = BackendOption.nemotron35Multilingual
@@ -37,6 +47,34 @@ struct OnboardingFlowTests {
             resolvedBackend: BackendOption.resolvedOnboardingBackend(initial, currentOSVersion: version),
             currentOSVersion: version
         ) == min(requestedStep, 1))
+    }
+
+    @Test("unfinished guided setup cannot be skipped when onboarding resumes")
+    func unfinishedSetupGatesResume() {
+        #expect(OnboardingFlow.setupGatedResumeStep(
+            requestedStep: OnboardingFlow.Step.review.rawValue,
+            setupStep: .meetingTranscription,
+            isReady: false
+        ) == OnboardingFlow.Step.meetingTranscription.rawValue)
+        #expect(OnboardingFlow.setupGatedResumeStep(
+            requestedStep: OnboardingFlow.Step.review.rawValue,
+            setupStep: .quill,
+            isReady: false
+        ) == OnboardingFlow.Step.quill.rawValue)
+    }
+
+    @Test("ready guided setup preserves the requested resume step")
+    func readySetupPreservesResume() {
+        #expect(OnboardingFlow.setupGatedResumeStep(
+            requestedStep: OnboardingFlow.Step.review.rawValue,
+            setupStep: .meetingTranscription,
+            isReady: true
+        ) == OnboardingFlow.Step.review.rawValue)
+        #expect(OnboardingFlow.setupGatedResumeStep(
+            requestedStep: OnboardingFlow.Step.learn.rawValue,
+            setupStep: .quill,
+            isReady: false
+        ) == OnboardingFlow.Step.learn.rawValue)
     }
 
     @Test("Everything restores the prior capability union when toggled off")
@@ -76,49 +114,50 @@ struct OnboardingFlowTests {
 
     @Test("voice notes orders push-to-talk steps without paste permission")
     func voiceNotesOrderedSteps() {
-        #expect(OnboardingFlow.orderedSteps(for: .voiceNotes) == [0, 1, 2, 3, 4])
+        #expect(OnboardingFlow.orderedSteps(for: .voiceNotes) == [0, 8, 1, 12, 7, 2, 3, 4, 11])
     }
 
     @Test("dictation orders dictation-only steps")
     func dictationOrderedSteps() {
-        #expect(OnboardingFlow.orderedSteps(for: .dictation) == [0, 1, 2, 3, 4])
+        #expect(OnboardingFlow.orderedSteps(for: .dictation) == [0, 8, 1, 10, 12, 7, 2, 3, 4, 11])
     }
 
     @Test("meetings orders meetings-only steps")
     func meetingsOrderedSteps() {
-        #expect(OnboardingFlow.orderedSteps(for: .meetings) == [0, 1, 3, 5, 6])
+        #expect(OnboardingFlow.orderedSteps(for: .meetings) == [0, 8, 9, 5, 12, 7, 3, 6, 11])
     }
 
     @Test("dictation and meetings orders combined steps")
     func dictationAndMeetingsOrderedSteps() {
-        #expect(OnboardingFlow.orderedSteps(for: .dictationAndMeetings) == [0, 1, 2, 3, 4, 5, 6])
+        #expect(OnboardingFlow.orderedSteps(for: .dictationAndMeetings) == [0, 8, 1, 9, 5, 10, 12, 7, 2, 3, 4, 6, 11])
     }
 
     @Test("multi-select unions include every required workflow step")
     func multiSelectUnionOrderedSteps() {
-        #expect(OnboardingFlow.orderedSteps(for: .voiceNotesAndMeetings) == [0, 1, 2, 3, 4, 5, 6])
-        #expect(OnboardingFlow.orderedSteps(for: .voiceNotesAndDictation) == [0, 1, 2, 3, 4])
-        #expect(OnboardingFlow.orderedSteps(for: .everything) == [0, 1, 2, 3, 4, 5, 6])
+        #expect(OnboardingFlow.orderedSteps(for: .voiceNotesAndMeetings) == [0, 8, 1, 9, 5, 12, 7, 2, 3, 4, 6, 11])
+        #expect(OnboardingFlow.orderedSteps(for: .voiceNotesAndDictation) == [0, 8, 1, 10, 12, 7, 2, 3, 4, 11])
+        #expect(OnboardingFlow.orderedSteps(for: .everything) == [0, 8, 1, 9, 5, 10, 12, 7, 2, 3, 4, 6, 11])
     }
 
     @Test("restored calendar step uses macOS calendar access")
     func restoredRemovedCalendarStep() {
         for useCase: OnboardingUseCase in [.meetings, .dictationAndMeetings, .voiceNotesAndMeetings, .everything] {
             #expect(OnboardingFlow.normalizedStep(6, for: useCase) == OnboardingFlow.Step.calendarAccess.rawValue)
-            #expect(OnboardingFlow.orderedSteps(for: useCase).last == OnboardingFlow.Step.calendarAccess.rawValue)
+            #expect(OnboardingFlow.orderedSteps(for: useCase).contains(OnboardingFlow.Step.calendarAccess.rawValue))
+            #expect(OnboardingFlow.orderedSteps(for: useCase).last == OnboardingFlow.Step.review.rawValue)
         }
     }
 
     @Test("normalized step advances over skipped steps")
     func normalizedStepAdvancesOverSkippedSteps() {
         #expect(OnboardingFlow.normalizedStep(2, for: .meetings) == 3)
-        #expect(OnboardingFlow.normalizedStep(4, for: .meetings) == 5)
+        #expect(OnboardingFlow.normalizedStep(4, for: .meetings) == 6)
     }
 
     @Test("normalized step keeps valid steps and clamps after final step")
     func normalizedStepKeepsValidAndClampsAfterFinalStep() {
         #expect(OnboardingFlow.normalizedStep(3, for: .meetings) == 3)
-        #expect(OnboardingFlow.normalizedStep(99, for: .dictation) == 4)
+        #expect(OnboardingFlow.normalizedStep(99, for: .dictation) == 11)
         #expect(OnboardingFlow.normalizedStep(4, for: .voiceNotes) == 4)
     }
 
@@ -186,6 +225,9 @@ struct OnboardingFlowTests {
         let resumedAtPermissions = OnboardingFlow.hasCompletedPermissionsStep(
             resumingAt: OnboardingFlow.Step.permissions.rawValue
         )
+        let resumedAtAppearance = OnboardingFlow.hasCompletedPermissionsStep(
+            resumingAt: OnboardingFlow.Step.appearance.rawValue
+        )
         let schedulesAfterCompletion = OnboardingFlow.shouldSchedulePermissionAdvance(
             currentStep: OnboardingFlow.Step.permissions.rawValue,
             requiredPermissionsGranted: true,
@@ -201,6 +243,7 @@ struct OnboardingFlowTests {
 
         #expect(resumedAfterPermissions)
         #expect(!resumedAtPermissions)
+        #expect(!resumedAtAppearance)
         #expect(!schedulesAfterCompletion)
         #expect(schedulesInitialCompletion)
     }
@@ -264,14 +307,14 @@ struct OnboardingFlowTests {
     @Test("dictation monitor does not start on a later meeting step")
     func dictationMonitorDoesNotStartAfterSkippedStep() {
         #expect(OnboardingFlow.dictationTestMonitorAction(
-            currentStep: OnboardingFlow.Step.meetingSummary.rawValue,
+            currentStep: OnboardingFlow.Step.calendarAccess.rawValue,
             dictationTestStep: OnboardingFlow.dictationTestStep,
             modelReady: true,
             monitorActive: false,
             dictationTesting: false
         ) == .none)
         #expect(OnboardingFlow.dictationTestMonitorAction(
-            currentStep: OnboardingFlow.Step.meetingSummary.rawValue,
+            currentStep: OnboardingFlow.Step.calendarAccess.rawValue,
             dictationTestStep: OnboardingFlow.dictationTestStep,
             modelReady: true,
             monitorActive: true,

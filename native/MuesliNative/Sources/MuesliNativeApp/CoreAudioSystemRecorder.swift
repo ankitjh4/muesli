@@ -291,14 +291,14 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     private func createTapAndAggregateDevice() throws {
         // Use the global stereo process mix. This is the closest CoreAudio tap
         // equivalent to ScreenCaptureKit's "system audio" stream: all process
-        // output mixed to stereo, excluding Muesli itself. The previous
+        // output mixed to stereo, excluding Muesli+ itself. The previous
         // device-stream tap could be valid but zero-filled on some routes.
         guard let ownProcessID = Self.currentProcessAudioObjectID() else {
             throw RecorderError.coreAudioSetupFailed("resolve own process for tap exclusion", kAudioHardwareBadObjectError)
         }
         let tapDesc = Self.makeGlobalTapDescription(
             excludingProcessID: ownProcessID,
-            name: "Muesli System Audio Tap"
+            name: "Muesli+ System Audio Tap"
         )
 
         // Register the tap with the audio system first — this triggers the
@@ -316,7 +316,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         // Stable aggregate UID: one identity across all sessions, so an
         // unclean stop can never accumulate fresh HAL settings entries.
         // The daemon enforces UID uniqueness globally, so if a phantom from a
-        // crashed session still holds the stable UID (or another Muesli
+        // crashed session still holds the stable UID (or another Muesli+
         // instance is recording), creation fails with 'nope' — in that case we
         // retry once with a single deterministic fallback UID. The fallback is
         // deliberately NOT a fresh UUID: private aggregate devices are
@@ -371,7 +371,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
 
     static func makeAggregateDeviceDescription(tapUID: String, aggregateUID: String) -> NSDictionary {
         [
-            kAudioAggregateDeviceNameKey: "Muesli System Audio",
+            kAudioAggregateDeviceNameKey: "Muesli+ System Audio",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceTapListKey: [
@@ -683,7 +683,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         guard let selfObjectID = currentProcessAudioObjectID() else { return false }
         let tapDesc = makeGlobalTapDescription(
             excludingProcessID: selfObjectID,
-            name: "Muesli Permission Check"
+            name: "Muesli+ Permission Check"
         )
 
         var testTapID: AudioObjectID = kAudioObjectUnknown
@@ -803,7 +803,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
                 deviceID, &nameAddr, 0, nil, &nameSize, &name
             ) == noErr, let name else { continue }
 
-            if (name.takeRetainedValue() as String) == "Muesli System Audio" {
+            if (name.takeRetainedValue() as String) == "Muesli+ System Audio" {
                 fputs("[system-audio] cleaning up stale aggregate device \(deviceID)\n", stderr)
                 AudioHardwareDestroyAggregateDevice(deviceID)
             }

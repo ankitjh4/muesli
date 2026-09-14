@@ -1,4 +1,4 @@
-# xcodegen spec for the production Muesli app target.
+# xcodegen spec for the production Muesli+ app target.
 #
 # This project exists for exactly one reason: App Intents metadata extraction
 # (Contents/Resources/Metadata.appintents) only runs for a genuine Xcode
@@ -34,10 +34,11 @@ targets:
         product: MuesliNativeAppCore
     settings:
       base:
-        PRODUCT_NAME: Muesli
-        PRODUCT_BUNDLE_IDENTIFIER: com.muesli.build.intermediate
+        PRODUCT_NAME: MuesliPlus
+        PRODUCT_BUNDLE_IDENTIFIER: com.muesliplus.build.intermediate
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: "Muesli+ uses the camera only when you start an experimental lip-dictation test."
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         MARKETING_VERSION: "1"
         CURRENT_PROJECT_VERSION: "1"

@@ -189,6 +189,9 @@ struct ModelsView: View {
     private var selectedCategoryContent: some View {
         switch appState.selectedModelsCategory {
         case .dictation:
+            ForEach(DictationModelGroup.ordered(active: controller.selectedBackend), id: \.self) { group in
+            switch group {
+            case .system:
             ForEach(BackendOption.systemManaged, id: \.model) { option in
                 let featureTourTarget: FeatureTourTarget? = option.backend == BackendOption.appleSpeechAnalyzer.backend
                     ? .appleSpeechCard
@@ -202,6 +205,7 @@ struct ModelsView: View {
                 .featureTourTarget(featureTourTarget)
             }
 
+            case .parakeet:
             familyCard(
                 title: "Parakeet Family",
                 subtitle: "The most responsive choices for everyday dictation, with multilingual and English-only options.",
@@ -213,6 +217,7 @@ struct ModelsView: View {
             .id(FeatureTourTarget.parakeetFamilyCard.rawValue)
             .featureTourTarget(.parakeetFamilyCard)
 
+            case .whisper:
             familyCard(
                 title: "Whisper",
                 subtitle: "Dependable alternatives when you prefer Whisper's transcription style or need broader multilingual coverage.",
@@ -222,12 +227,15 @@ struct ModelsView: View {
                 options: BackendOption.whisperFamily
             )
 
-            modelCard(option: .cohereTranscribe, logo: "cohere-logo")
-            bodhanCard(selection: $selectedBodhanCoreModel, isCore: true)
-            bodhanCard(selection: $selectedBodhanFlexModel, isCore: false)
+            case .hinglish: modelCard(option: .whisperHinglishRomanized, logo: "openai-logo")
+            case .cohere: modelCard(option: .cohereTranscribe, logo: "cohere-logo")
+            case .bodhanCore: bodhanCard(selection: $selectedBodhanCoreModel, isCore: true)
+            case .bodhanFlex: bodhanCard(selection: $selectedBodhanFlexModel, isCore: false)
                 .id(FeatureTourTarget.bodhanFlexCard.rawValue)
                 .featureTourTarget(.bodhanFlexCard)
-            experimentalSection
+            case .experimental: experimentalSection
+            }
+            }
             comingSoonSection
         case .streaming:
             streamingSection
@@ -685,13 +693,7 @@ struct ModelsView: View {
             .padding(.top, MuesliTheme.spacing8)
 
             VStack(spacing: MuesliTheme.spacing12) {
-                ForEach(Gemma4LiteRTModel.allCases) { model in
-                    gemmaCleanupModelCard(model)
-                }
-
-                ForEach(displayedPostProcessorOptions) { option in
-                    postProcModelCard(option)
-                }
+                languageModelCards(forQuill: false)
             }
         }
     }
@@ -704,14 +706,28 @@ struct ModelsView: View {
             Text("Rewrite selected text or generate text at the cursor with a local model. Download a model, choose Use for Quill, then enable Quill in Settings. These downloads are shared with cleanup.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(MuesliTheme.textSecondary)
-            ForEach(Gemma4LiteRTModel.allCases) { model in
-                gemmaCleanupModelCard(model, forQuill: true)
-            }
-            ForEach(displayedPostProcessorOptions.filter(\.supportsQuil)) { option in
-                postProcModelCard(option, forQuill: true)
-            }
+            languageModelCards(forQuill: true)
         }
         .padding(.top, MuesliTheme.spacing8)
+    }
+
+    private enum LanguageModelRow: Identifiable {
+        case gemma(Gemma4LiteRTModel), local(PostProcessorOption)
+        var id: String {
+            switch self { case .gemma(let model): return model.repoID; case .local(let model): return model.id }
+        }
+    }
+
+    private func languageModelCards(forQuill: Bool) -> some View {
+        let rows = Gemma4LiteRTModel.allCases.map(LanguageModelRow.gemma)
+            + displayedPostProcessorOptions.filter { !forQuill || $0.supportsQuil }.map(LanguageModelRow.local)
+        let model = forQuill ? appState.config.quilModel : appState.config.activePostProcessorId
+        return ForEach(ActiveModelOrder.first(rows) { $0.id == model }) { row in
+            switch row {
+            case .gemma(let model): gemmaCleanupModelCard(model, forQuill: forQuill)
+            case .local(let option): postProcModelCard(option, forQuill: forQuill)
+            }
+        }
     }
 
     private func selectQuillModel(backend: TranscriptCleanupBackendOption, model: String) {
@@ -965,6 +981,19 @@ struct ModelsView: View {
                     .pickerStyle(.menu)
                     .frame(maxWidth: 220, alignment: .leading)
                     .disabled(incompatibilityReason != nil)
+                }
+            }
+
+            if selectedOption.isRomanizedHinglishModel {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Output")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Text("Hinglish · Roman script")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
                 }
             }
 
@@ -1450,6 +1479,19 @@ struct ModelsView: View {
                 }
             }
 
+            if option.isRomanizedHinglishModel {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Output")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Text("Hinglish · Roman script")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+            }
+
             if option.backend == BackendOption.nemotron35Multilingual.backend {
                 HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
                     Text("Language")
@@ -1599,6 +1641,9 @@ struct ModelsView: View {
                     }
                     if !forQuill && appState.config.enablePostProcessor && !appState.activePostProcessor.isDownloaded {
                         controller.selectPostProcessor(option)
+                        controller.preloadExperimentalTranscriptionFeatures()
+                    }
+                    if appState.config.pendingLocalCleanupSetup {
                         controller.preloadExperimentalTranscriptionFeatures()
                     }
                 }

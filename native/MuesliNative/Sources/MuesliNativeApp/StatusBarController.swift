@@ -81,11 +81,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         } else {
             detail = nil
         }
+        let totalWords = controller.appState.dictationStats.totalWords
         statusItem.button?.attributedTitle = MenuBarIconRenderer.statusTitle(
             hotkey: controller.config.dictationHotkey,
             showsHotkey: controller.config.showHotkeyInMenuBar,
+            wordCount: totalWords,
             detail: detail
         )
+        statusItem.button?.toolTip = "\(AppIdentity.displayName) · \(totalWords.formatted()) words dictated"
     }
 
     private func build() {
@@ -101,6 +104,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func rebuildMenu() {
         menu.removeAllItems()
+
+        menu.addItem(actionItem(
+            title: controller.config.offlineInference ? "✓ Offline models (preview)" : "Use offline models (preview)",
+            action: #selector(MuesliController.selectOfflineInferenceFromMenu)
+        ))
+        menu.addItem(actionItem(
+            title: controller.config.offlineInference ? "Allow online models" : "✓ Online / mixed models",
+            action: #selector(MuesliController.selectOnlineInferenceFromMenu)
+        ))
+        menu.addItem(.separator())
 
         // Upcoming calendar events
         let hidden = controller.appState.hiddenCalendarEventIDs
@@ -160,7 +173,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
 
         let hostedVisibility = controller.hostedDictationModelVisibility
-        if hostedVisibility.shows(.openAI) {
+        if !controller.config.offlineInference && hostedVisibility.shows(.openAI) {
             dictationModelMenu.addItem(.separator())
             dictationModelMenu.addItem(.sectionHeader(title: "OpenAI"))
             var openAIModels = OpenAITranscriptionClient.modelPresets
@@ -183,7 +196,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             }
         }
 
-        if hostedVisibility.shows(.openRouter) {
+        if !controller.config.offlineInference && hostedVisibility.shows(.openRouter) {
             controller.loadOpenRouterModels(.transcription)
             dictationModelMenu.addItem(.separator())
             dictationModelMenu.addItem(.sectionHeader(title: "OpenRouter"))
@@ -211,12 +224,113 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 }
             }
         }
+        if let active = dictationModelMenu.items.first(where: { $0.title.hasPrefix("✓ ") }) {
+            dictationModelMenu.removeItem(active)
+            dictationModelMenu.insertItem(active, at: 0)
+        }
         menu.setSubmenu(dictationModelMenu, for: dictationModelItem)
         menu.addItem(dictationModelItem)
 
+        let cleanupItem = NSMenuItem(title: "Text Cleanup Model", action: nil, keyEquivalent: "")
+        let cleanupMenu = NSMenu()
+        let off = NSMenuItem(
+            title: controller.config.enablePostProcessor ? "Off" : "✓ Off",
+            action: #selector(MuesliController.disableCleanupFromMenu(_:)), keyEquivalent: ""
+        )
+        off.target = controller
+        cleanupMenu.addItem(off)
+        cleanupMenu.addItem(.sectionHeader(title: "On this Mac — downloaded language models"))
+        for option in PostProcessorOption.downloaded {
+            let selected = controller.config.enablePostProcessor
+                && controller.selectedPostProcessorBackend == .local
+                && controller.config.activePostProcessorId == option.id
+            let item = NSMenuItem(
+                title: "\(selected ? "✓ " : "")\(option.label)",
+                action: #selector(MuesliController.selectLocalCleanupFromMenu(_:)), keyEquivalent: ""
+            )
+            item.target = controller
+            item.representedObject = option.id
+            item.isEnabled = option.isCompatible(with: controller.selectedBackend)
+            cleanupMenu.addItem(item)
+        }
+        if !controller.config.offlineInference && controller.appState.isOpenRouterAuthenticated {
+            controller.loadOpenRouterModels(.text)
+            cleanupMenu.addItem(.sectionHeader(title: "OpenRouter — sends transcript online"))
+            for preset in OpenRouterModelSelection.presetsIncludingConfiguredModel(
+                controller.appState.openRouterSummaryModels,
+                configuredModel: controller.config.postProcessorOpenRouterModel
+            ) {
+                let selected = controller.config.enablePostProcessor
+                    && controller.selectedPostProcessorBackend == .hosted(.openRouter)
+                    && controller.config.postProcessorOpenRouterModel == preset.id
+                let item = NSMenuItem(
+                    title: "\(selected ? "✓ " : "")\(preset.label)",
+                    action: #selector(MuesliController.selectOnlineCleanupFromMenu(_:)), keyEquivalent: ""
+                )
+                item.target = controller
+                item.representedObject = preset.id
+                cleanupMenu.addItem(item)
+            }
+        }
+        cleanupMenu.addItem(.separator())
+        cleanupMenu.addItem(actionItem(title: "Download models / configure cleanup…", action: #selector(MuesliController.openSettingsTab)))
+        if let active = cleanupMenu.items.first(where: { $0.title.hasPrefix("✓ ") }) {
+            cleanupMenu.removeItem(active)
+            cleanupMenu.insertItem(active, at: 0)
+        }
+        menu.setSubmenu(cleanupMenu, for: cleanupItem)
+        menu.addItem(cleanupItem)
+
+        let quilItem = NSMenuItem(title: "Quill Writing Model", action: nil, keyEquivalent: "")
+        let quilMenu = NSMenu()
+        quilMenu.addItem(.sectionHeader(title: "On this Mac — downloaded language models"))
+        for option in PostProcessorOption.downloaded where option.supportsQuil {
+            let selected = controller.config.quilBackend == TranscriptCleanupBackendOption.local.backend
+                && controller.config.quilModel == option.id
+            let item = NSMenuItem(
+                title: "\(selected ? "✓ " : "")\(option.quilLabel)",
+                action: #selector(MuesliController.selectLocalQuilFromMenu(_:)), keyEquivalent: ""
+            )
+            item.target = controller
+            item.representedObject = option.id
+            quilMenu.addItem(item)
+        }
+        if !controller.config.offlineInference && controller.appState.isOpenRouterAuthenticated {
+            controller.loadOpenRouterModels(.text)
+            quilMenu.addItem(.sectionHeader(title: "OpenRouter — sends text online"))
+            for preset in OpenRouterModelSelection.presetsIncludingConfiguredModel(
+                controller.appState.openRouterSummaryModels,
+                configuredModel: controller.config.quilBackend == TranscriptCleanupBackendOption.hosted(.openRouter).backend
+                    ? controller.config.quilModel : ""
+            ) {
+                let selected = controller.config.quilBackend == TranscriptCleanupBackendOption.hosted(.openRouter).backend
+                    && controller.config.quilModel == preset.id
+                let item = NSMenuItem(
+                    title: "\(selected ? "✓ " : "")\(preset.label)",
+                    action: #selector(MuesliController.selectOnlineQuilFromMenu(_:)), keyEquivalent: ""
+                )
+                item.target = controller
+                item.representedObject = preset.id
+                quilMenu.addItem(item)
+            }
+        }
+        quilMenu.addItem(.separator())
+        quilMenu.addItem(actionItem(title: "Download models / configure Quill…", action: #selector(MuesliController.openSettingsTab)))
+        if let active = quilMenu.items.first(where: { $0.title.hasPrefix("✓ ") }) {
+            quilMenu.removeItem(active)
+            quilMenu.insertItem(active, at: 0)
+        }
+        menu.setSubmenu(quilMenu, for: quilItem)
+        menu.addItem(quilItem)
+
         let meetingBackendItem = NSMenuItem(title: "Meetings Backend", action: nil, keyEquivalent: "")
         let meetingBackendMenu = NSMenu()
-        for option in MeetingSummaryBackendOption.all {
+        if controller.config.offlineInference {
+            let local = NSMenuItem(title: "On this Mac — \(PostProcessorOption.defaultQuilOption.quilLabel)", action: nil, keyEquivalent: "")
+            local.isEnabled = false
+            meetingBackendMenu.addItem(local)
+        }
+        for option in MeetingSummaryBackendOption.all where !controller.config.offlineInference {
             let prefix = controller.selectedMeetingSummaryBackend == option ? "✓ " : ""
             let item = NSMenuItem(
                 title: "\(prefix)\(option.label)",
@@ -232,7 +346,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(actionItem(title: "Settings…", action: #selector(MuesliController.openSettingsTab)))
-        menu.addItem(actionItem(title: "What's New in Muesli", action: #selector(MuesliController.showWhatsNew)))
+        menu.addItem(actionItem(title: "What's New in Muesli+", action: #selector(MuesliController.showWhatsNew)))
         menu.addItem(checkForUpdatesItem())
         menu.addItem(.separator())
         menu.addItem(actionItem(title: "Quit", action: #selector(MuesliController.quitApp)))

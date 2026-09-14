@@ -1,13 +1,13 @@
 ---
 name: muesli-dev-build-lanes
-description: Use when working on Muesli local dev builds, fixed dev lanes, parallel worktrees, SwiftPM scratch paths, app bundle IDs, app support directories, signing, entitlements, iCloud/APNs-capable builds, or local-only builds that should omit cloud entitlements.
+description: Use when working on Muesli+ local dev builds, fixed dev lanes, parallel worktrees, SwiftPM scratch paths, app bundle IDs, app support directories, signing, entitlements, iCloud/APNs-capable builds, or local-only builds that should omit cloud entitlements.
 ---
 
-# Muesli Dev Build Lanes
+# Muesli+ Dev Build Lanes
 
 ## Overview
 
-Use this skill to build and reason about local Muesli dev apps across multiple worktrees without overwriting app bundles, sharing support data, or accidentally requiring iCloud/APNs entitlements.
+Use this skill to build and reason about local Muesli+ dev apps across multiple worktrees without overwriting app bundles, sharing support data, or accidentally requiring iCloud/APNs entitlements.
 
 ## Core Workflow
 

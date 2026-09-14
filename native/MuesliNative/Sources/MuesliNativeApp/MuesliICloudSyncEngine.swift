@@ -1063,7 +1063,7 @@ final class MuesliICloudSyncEngine {
                 }
             }
             operation.recordWithIDWasDeletedBlock = { _, _ in
-                // Sync contract: Muesli clients must delete text records by writing
+                // Sync contract: Muesli+ clients must delete text records by writing
                 // isDeleted tombstones. Hard CloudKit deletes do not include enough
                 // metadata to resolve local conflict state safely, so they are ignored.
             }

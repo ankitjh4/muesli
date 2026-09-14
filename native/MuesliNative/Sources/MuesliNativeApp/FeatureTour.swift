@@ -129,14 +129,14 @@ enum FeatureTourCatalog {
                 id: "quill",
                 eyebrow: "QUILL MODE",
                 title: "Edit text with your voice",
-                message: "Highlight text or place the cursor, activate Quill, and say what you want changed. Use a configured AI provider, or download Gemma 4 for a private, on-device workflow.",
+                message: "Highlight text, hold your Quill shortcut, and say what you want changed. With no selection, Quill writes new text at the cursor. Use ChatGPT or OpenRouter, or download the small Qwen model for private on-device editing.",
                 systemImage: "pencil.and.scribble",
                 target: .quillSettings
             ),
             FeatureTourStep(
                 id: "apple-shortcuts",
                 eyebrow: "APPLE SHORTCUTS",
-                title: "Control Muesli with Command-Space",
+                title: "Control Muesli+ with Command-Space",
                 message: "Press Command-Space, then type Start Dictation, Stop Dictation, Start Meeting, or Stop Meeting.",
                 systemImage: "command",
                 target: nil
@@ -152,7 +152,7 @@ enum FeatureTourCatalog {
             FeatureTourStep(
                 id: "parakeet-unified",
                 eyebrow: "ON-DEVICE ENGLISH",
-                title: "Meet the best English STT model",
+                title: "Meet the recommended English speech model",
                 message: "Parakeet Unified balances speed and accuracy for fast, reliable English transcription on your Mac. For other languages, choose multilingual Parakeet v3.",
                 systemImage: "waveform",
                 target: .parakeetFamilyCard

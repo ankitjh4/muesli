@@ -17,6 +17,187 @@ struct SpeechSegmentTests {
 
 @Suite("SpeechTranscriptionResult")
 struct SpeechTranscriptionResultTests {
+    @Test("default saved M4A recording can be re-transcribed through hosted audio")
+    func savedM4AHostedRoundTrip() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-hosted-m4a-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingRecordingWriter()
+        writer.appendSystem(Array(repeating: Int16(1200), count: 16_000))
+        let temporary = try #require(writer.stop())
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let saved = try await MeetingRecordingWriter.persistTemporaryRecordingAsync(
+            from: temporary, meetingTitle: "Synthetic test", startedAt: Date(), supportDirectory: directory)
+        #expect(saved.pathExtension == "m4a")
+        let client = OpenRouterTranscriptionClient(networkPolicy: ModelNetworkPolicy()) { request in
+            let data = try #require(request.httpBody)
+            let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let input = try #require(body["input_audio"] as? [String: Any])
+            #expect(input["format"] as? String == "wav")
+            let encoded = try #require(input["data"] as? String)
+            let wav = try #require(Data(base64Encoded: encoded))
+            #expect(String(data: wav.prefix(4), encoding: .ascii) == "RIFF")
+            #expect(wav.count > 44)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data("{\"text\":\"Saved recording works.\"}".utf8), response)
+        }
+        let result = try await HostedMeetingAudio.transcribe(url: saved,
+            configuration: .init(apiKey: "test", model: "test/model"), client: client)
+        #expect(result.text == "Saved recording works.")
+        #expect(result.segments.count == 1)
+        #expect(abs((result.segments.first?.end ?? 0) - 1) < 0.2)
+    }
+
+    @Test("meeting online selection is persisted, snapshotted, and suppressed offline")
+    func meetingSelectionSnapshot() throws {
+        var config = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(HostedMeetingAudio.selection(config: config, apiKey: "key") == nil)
+        config.useOpenRouterForMeetings = true
+        config.openRouterMeetingModel = " provider/meeting "
+        config = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        let snapshot = try #require(HostedMeetingAudio.selection(config: config, apiKey: "key"))
+        config.openRouterMeetingModel = "provider/other"
+        #expect(snapshot.model == "provider/meeting")
+        config.offlineInference = true
+        #expect(HostedMeetingAudio.selection(config: config, apiKey: "key") == nil)
+        config.offlineInference = false
+        #expect(HostedMeetingAudio.selection(config: config, apiKey: "key")?.model == "provider/other")
+    }
+
+    @Test("hosted meeting pieces are bounded and cover the recording without overlap")
+    func boundedHostedPieces() async throws {
+        actor Requests {
+            var sizes: [Int] = []
+            func add(_ size: Int) -> Int { sizes.append(size); return sizes.count }
+        }
+        let requests = Requests()
+        let audio = try WavWriter.writeTemporaryWAV(samples: [Float](repeating: 0, count: 35), directoryName: "muesli-hosted-meeting-test")
+        defer { try? FileManager.default.removeItem(at: audio) }
+        let client = OpenRouterTranscriptionClient(networkPolicy: ModelNetworkPolicy()) { request in
+            let requestData = try #require(request.httpBody)
+            let body = try #require(JSONSerialization.jsonObject(with: requestData) as? [String: Any])
+            let input = try #require(body["input_audio"] as? [String: Any])
+            let encoded = try #require(input["data"] as? String)
+            let size = try #require(Data(base64Encoded: encoded)).count
+            let number = await requests.add(size)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data("{\"text\":\"Part \(number).\"}".utf8), response)
+        }
+        let result = try await HostedMeetingAudio.transcribe(url: audio, configuration: .init(apiKey: "test", model: "test/model"), client: client, chunkFrames: 10)
+        #expect(await requests.sizes == [64, 64, 64, 54])
+        #expect(result.text == "Part 1. Part 2. Part 3. Part 4.")
+        let expectedStarts = [0.0, 10, 20, 30].map { $0 / 16_000 }
+        let expectedEnds = [10.0, 20, 30, 35].map { $0 / 16_000 }
+        #expect(result.segments.map(\.start) == expectedStarts)
+        #expect(result.segments.map(\.end) == expectedEnds)
+    }
+
+    @Test("offline transition between pieces stops further uploads")
+    func offlineStopsHostedPieces() async throws {
+        let audio = try WavWriter.writeTemporaryWAV(samples: [Float](repeating: 0, count: 35), directoryName: "muesli-hosted-meeting-test")
+        defer { try? FileManager.default.removeItem(at: audio) }
+        let policy = ModelNetworkPolicy()
+        let client = OpenRouterTranscriptionClient(networkPolicy: policy) { request in
+            #expect(policy.isAllowed)
+            policy.setAllowed(false)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data("{\"text\":\"Part one.\"}".utf8), response)
+        }
+        do {
+            _ = try await HostedMeetingAudio.transcribe(url: audio, configuration: .init(apiKey: "test", model: "test/model"), client: client, chunkFrames: 10)
+            Issue.record("Offline transition must stop the operation")
+        } catch let failure as HostedMeetingAudio.PartialFailure {
+            #expect(failure.result.text == "Part one.")
+            #expect(failure.completedThrough == 10.0 / 16_000)
+            switch failure.underlying {
+            case OpenRouterTranscriptionError.offlineMode: break
+            default: Issue.record("Expected offline cause")
+            }
+        } catch OpenRouterTranscriptionError.offlineMode {
+            // The in-flight request can be cancelled before its first result
+            // is accepted; in that case there is no completed portion to retain.
+        }
+    }
+
+    @Test("later hosted failure retains completed text and its exact audio boundary")
+    func hostedPartialFailureKeepsCompletedPieces() async throws {
+        actor Requests { var count = 0; func next() -> Int { count += 1; return count } }
+        let requests = Requests()
+        let audio = try WavWriter.writeTemporaryWAV(samples: [Float](repeating: 0, count: 35), directoryName: "muesli-hosted-meeting-test")
+        defer { try? FileManager.default.removeItem(at: audio) }
+        let client = OpenRouterTranscriptionClient(networkPolicy: ModelNetworkPolicy()) { request in
+            if await requests.next() == 2 { throw URLError(.timedOut) }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data("{\"text\":\"Completed words.\"}".utf8), response)
+        }
+        do {
+            _ = try await HostedMeetingAudio.transcribe(url: audio, configuration: .init(apiKey: "test", model: "test/model"), client: client, chunkFrames: 10)
+            Issue.record("Expected partial failure")
+        } catch let failure as HostedMeetingAudio.PartialFailure {
+            #expect(failure.result.text == "Completed words.")
+            #expect(failure.result.segments.count == 1)
+            #expect(failure.completedThrough == 10.0 / 16_000)
+            #expect(failure.result.segments.first?.end == failure.completedThrough)
+        }
+        #expect(await requests.count == 2)
+    }
+
+    @Test("hosted meeting transport failures are not automatically retried")
+    func hostedPiecesDoNotRetry() async throws {
+        actor Requests { var count = 0; func increment() { count += 1 } }
+        let requests = Requests()
+        let audio = try WavWriter.writeTemporaryWAV(samples: [Float](repeating: 0, count: 35), directoryName: "muesli-hosted-meeting-test")
+        defer { try? FileManager.default.removeItem(at: audio) }
+        let client = OpenRouterTranscriptionClient(networkPolicy: ModelNetworkPolicy()) { _ in
+            await requests.increment()
+            throw URLError(.timedOut)
+        }
+        do {
+            _ = try await HostedMeetingAudio.transcribe(url: audio, configuration: .init(apiKey: "test", model: "test/model"), client: client, chunkFrames: 10)
+            Issue.record("Expected transport failure")
+        } catch OpenRouterTranscriptionError.network { }
+        #expect(await requests.count == 1)
+    }
+
+    @Test("meeting hosted route uses selected provider model without local ASR or invented timings")
+    func hostedMeetingRoute() async throws {
+        let audio = try WavWriter.writeTemporaryWAV(samples: [Float](repeating: 0, count: 1600), directoryName: "muesli-hosted-meeting-test")
+        defer { try? FileManager.default.removeItem(at: audio) }
+        let client = OpenRouterTranscriptionClient(networkPolicy: ModelNetworkPolicy()) { request in
+            let data = try #require(request.httpBody)
+            let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(body["model"] as? String == "test/meeting-model")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data("{\"text\":\"Hello team.\"}".utf8), response)
+        }
+        let coordinator = TranscriptionCoordinator(openRouterMeetingClient: client)
+        let configuration = OpenRouterDictationConfiguration(apiKey: "test-key", model: "test/meeting-model")
+        let full = try await coordinator.transcribeMeeting(at: audio, backend: .whisper, openRouter: configuration)
+        let chunk = try await coordinator.transcribeMeetingChunk(at: audio, backend: .whisper, openRouter: configuration)
+        #expect(full.text == "Hello team.")
+        #expect(chunk.text == full.text)
+        #expect(full.segments.count == 1)
+        #expect(full.segments.first?.start == 0)
+        #expect(full.segments.first?.end == 0.1)
+        #expect(chunk.segments.count == 1)
+    }
+
+    @Test("hosted meeting routing respects offline policy before reading audio")
+    func hostedMeetingOfflineRejection() async {
+        let client = OpenRouterTranscriptionClient(networkPolicy: ModelNetworkPolicy(allowed: false)) { _ in
+            Issue.record("Offline meeting must not invoke hosted transport")
+            throw URLError(.badServerResponse)
+        }
+        let coordinator = TranscriptionCoordinator(openRouterMeetingClient: client)
+        do {
+            _ = try await coordinator.transcribeMeeting(at: URL(fileURLWithPath: "/nonexistent/meeting.wav"), backend: .whisper,
+                openRouter: .init(apiKey: "test", model: "test/model"))
+            Issue.record("Expected offline rejection")
+        } catch OpenRouterTranscriptionError.offlineMode { }
+        catch { Issue.record("Unexpected error: \(error)") }
+    }
+
 
     @Test("stores text and segments")
     func basicConstruction() {

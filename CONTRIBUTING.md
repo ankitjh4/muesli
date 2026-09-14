@@ -1,6 +1,6 @@
-# Contributing to Muesli
+# Contributing to Muesli+
 
-Thanks for helping improve Muesli. This project is a native macOS app built
+Thanks for helping improve Muesli+. This project is a native macOS app built
 with SwiftPM, AppKit, SwiftUI, and a small set of shell scripts around local
 builds and CI shards.
 
@@ -54,7 +54,7 @@ MUESLI_AEC_PROCESSOR=localvqe-strict MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh
 
 That installs `/Applications/MuesliDev.app` with bundle ID `com.muesli.dev`
 and stores data under `~/Library/Application Support/MuesliDev/`, so it does
-not touch your production Muesli install or data.
+not touch your production Muesli+ install or data.
 
 By default, `scripts/dev-test.sh` uses local-only entitlements. Maintainer
 machines keep CloudKit profiles outside this repository under a sibling
@@ -184,7 +184,7 @@ swift test --package-path native/MuesliNative \
 
 ## Contribution License
 
-Muesli is licensed under the [MIT License](LICENSE). By submitting a
+Muesli+ is licensed under the [MIT License](LICENSE). By submitting a
 contribution, you agree that your contribution is licensed under the same MIT
 License. Your DCO sign-off certifies that you have the right to submit the
 contribution under those terms.
@@ -199,7 +199,7 @@ request description. Include the source and applicable license or terms.
 
 ## Developer Certificate of Origin
 
-Every non-merge commit contributed to Muesli must be signed off under the
+Every non-merge commit contributed to Muesli+ must be signed off under the
 [Developer Certificate of Origin 1.1](DCO). The sign-off certifies that you
 created the contribution or otherwise have the right to submit it under the
 repository's open-source license.

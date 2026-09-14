@@ -13,10 +13,10 @@ enum ChatGPTResponsesError: LocalizedError {
 
 /// Shared request construction for ChatGPT-authenticated Responses calls.
 ///
-/// Muesli routes its existing ChatGPT OAuth credentials to the Codex inference
+/// Muesli+ routes its existing ChatGPT OAuth credentials to the Codex inference
 /// lane. That direct third-party contract is compatibility-sensitive, so keep
 /// request metadata centralized and the client identity honest: these headers
-/// describe Muesli and never impersonate an official Codex client. WHAM remains
+/// describe Muesli+ and never impersonate an official Codex client. WHAM remains
 /// available only as an explicit, process-level emergency rollback.
 enum ChatGPTResponsesTransport {
     enum Backend: Equatable {
@@ -66,7 +66,7 @@ enum ChatGPTResponsesTransport {
         if backend == .codex {
             request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             request.setValue(originator, forHTTPHeaderField: "originator")
-            request.setValue("Muesli/\(appVersion)", forHTTPHeaderField: "User-Agent")
+            request.setValue("Muesli+/\(appVersion)", forHTTPHeaderField: "User-Agent")
             request.setValue(sessionID.uuidString.lowercased(), forHTTPHeaderField: "session_id")
         }
         var supportedBody = body

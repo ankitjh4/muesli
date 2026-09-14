@@ -25,6 +25,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
     case whisperSmallEnglish = "whisper-small-english"
     case whisperMediumEnglish = "whisper-medium-english"
     case whisperLargeTurbo = "whisper-large-turbo"
+    case whisperHinglish = "whisper-hinglish"
 
     /// `nil` for models that don't go through `FluidAudioCLITranscriber`'s
     /// batch `AsrManager` path (streaming, or a different FluidAudio manager).
@@ -35,7 +36,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         case .parakeetUnified, .parakeetEou320ms, .senseVoice, .qwen3Asr, .nemotron35,
              .whisperTiny, .whisperTinyEnglish,
              .whisperSmall, .whisperSmallEnglish, .whisperMediumEnglish,
-             .whisperLargeTurbo:
+             .whisperLargeTurbo, .whisperHinglish:
             return nil
         }
     }
@@ -49,6 +50,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         case .whisperSmallEnglish: return "small.en"
         case .whisperMediumEnglish: return "medium.en"
         case .whisperLargeTurbo: return "large-v3-v20240930_626MB"
+        case .whisperHinglish: return ManagedASRModelPlans.hinglishWhisperKitModelName
         case .parakeetV3, .parakeetV2, .parakeetUnified, .parakeetEou320ms, .senseVoice, .qwen3Asr, .nemotron35:
             return nil
         }
@@ -101,7 +103,7 @@ struct TranscribeJSONPayload: Encodable {
 struct TranscribeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "transcribe",
-        abstract: "Transcribe a local audio file with Muesli's bundled local ASR models."
+        abstract: "Transcribe a local audio file with Muesli+'s bundled local ASR models."
     )
 
     @OptionGroup var global: GlobalOptions
@@ -109,11 +111,11 @@ struct TranscribeCommand: AsyncParsableCommand {
     var file: String
     @Option(name: .long, help: "Output format: text, json, or markdown.")
     var format: TranscribeOutputFormat = .text
-    @Option(name: .long, help: "Transcription model: parakeet-v3, parakeet-v2, parakeet-unified, parakeet-eou-320ms (streaming), sensevoice, qwen3-asr, nemotron35, whisper-tiny, whisper-tiny-english, whisper-small, whisper-small-english, whisper-medium-english, or whisper-large-turbo.")
+    @Option(name: .long, help: "Transcription model: parakeet-v3, parakeet-v2, parakeet-unified, parakeet-eou-320ms (streaming), sensevoice, qwen3-asr, nemotron35, whisper-tiny, whisper-tiny-english, whisper-small, whisper-small-english, whisper-medium-english, whisper-large-turbo, or whisper-hinglish.")
     var model: TranscribeModel = .parakeetUnified
-    @Flag(name: .long, help: "Generate meeting notes using the configured Muesli summary backend when available.")
+    @Flag(name: .long, help: "Generate meeting notes using the configured Muesli+ summary backend when available.")
     var summarize = false
-    @Flag(name: .long, help: "Save the transcript as an imported Muesli meeting.")
+    @Flag(name: .long, help: "Save the transcript as an imported Muesli+ meeting.")
     var saveMeeting = false
     @Option(name: .long, help: "Optional title override for saved meetings and markdown output.")
     var title: String?
@@ -215,7 +217,7 @@ struct MuesliAudioTranscriptionRequest {
     let saveMeeting: Bool
     /// Path to a JSON array of `CustomWord`-shaped entries. When set, applied to the
     /// transcript via `CustomWordMatcher.apply` after transcription — the same dictionary
-    /// correction step Muesli applies to dictations, so this measures "what if the
+    /// correction step Muesli+ applies to dictations, so this measures "what if the
     /// dictionary were enabled" against exactly the shipped implementation.
     var dictionaryURL: URL? = nil
 }
@@ -396,7 +398,7 @@ struct MuesliAudioTranscriptionPipeline {
         if summaryRequested {
             sections.append("## Summary unavailable")
             if warnings.isEmpty {
-                sections.append("Muesli could not generate structured notes from the configured summary backend.")
+                sections.append("Muesli+ could not generate structured notes from the configured summary backend.")
             } else {
                 sections.append(warnings.joined(separator: "\n"))
             }
@@ -635,7 +637,7 @@ struct RoutingAudioTranscriber: AudioTranscribing {
         case .nemotron35: transcriber = nemotron35
         case .whisperTiny, .whisperTinyEnglish,
              .whisperSmall, .whisperSmallEnglish, .whisperMediumEnglish,
-             .whisperLargeTurbo:
+             .whisperLargeTurbo, .whisperHinglish:
             transcriber = whisper
         }
         return try await transcriber.transcribe(wavURL: wavURL, model: model, progress: progress)
@@ -862,11 +864,14 @@ actor WhisperCLITranscriber: AudioTranscribing {
             throw CLIError.invalidInput("WhisperKit model was not loaded.", fix: "Run the command again after the model finishes downloading.")
         }
         let start = CFAbsoluteTimeGetCurrent()
-        // English-only `.en` checkpoints have no multilingual tokens — keep default DecodingOptions.
-        // Multilingual variants need detectLanguage; WhisperKit defaults otherwise force English.
+        // English-only `.en` checkpoints have no multilingual tokens. The
+        // Hinglish checkpoint deliberately uses the English task token to emit
+        // Romanized Hindi while preserving English spans.
         let decodeOptions: DecodingOptions
         if modelName.hasSuffix(".en") {
             decodeOptions = DecodingOptions()
+        } else if modelName == ManagedASRModelPlans.hinglishWhisperKitModelName {
+            decodeOptions = DecodingOptions(language: "en")
         } else {
             decodeOptions = DecodingOptions(detectLanguage: true)
         }
@@ -1260,7 +1265,7 @@ enum CLISummaryClient {
                 title: title
             )
         default:
-            throw CLISummaryError.unavailable("The configured ChatGPT session summary backend is app-only in headless CLI mode. Select OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM in Muesli settings for `muesli-cli transcribe --summarize`.")
+            throw CLISummaryError.unavailable("The configured ChatGPT session summary backend is app-only in headless CLI mode. Select OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM in Muesli+ settings for `muesli-cli transcribe --summarize`.")
         }
     }
 

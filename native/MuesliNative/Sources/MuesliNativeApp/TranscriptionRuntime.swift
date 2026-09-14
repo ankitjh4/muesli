@@ -138,22 +138,25 @@ actor TranscriptionCoordinator {
     private var diarizerLoadWaiters: [UUID: DiarizerLoadWaiter] = [:]
     private let diarizerModelLoader: DiarizerModelLoader
     private let vadLoader: VADLoader
+    private let openRouterMeetingClient: OpenRouterTranscriptionClient
     private let diarizerLoadOperationTimeout: Duration
     private let diarizerDiagnostics: DiarizerPreloadDiagnostics
     private var activeBackend: String?
 
     init(
         diarizerModelLoader: @escaping DiarizerModelLoader = { policy in
-            try await DiarizerModels.download(configuration: policy.modelConfiguration)
+            try await LocalSpeechHelperLoader.loadDiarizer(policy: policy)
         },
-        vadLoader: @escaping VADLoader = { try await VadManager() },
+        vadLoader: @escaping VADLoader = { try await LocalSpeechHelperLoader.loadVAD() },
         diarizerLoadOperationTimeout: Duration = TranscriptionCoordinator.defaultDiarizerLoadOperationTimeout,
-        diarizerDiagnostics: DiarizerPreloadDiagnostics = DiarizerPreloadDiagnostics()
+        diarizerDiagnostics: DiarizerPreloadDiagnostics = DiarizerPreloadDiagnostics(),
+        openRouterMeetingClient: OpenRouterTranscriptionClient = OpenRouterTranscriptionClient()
     ) {
         self.diarizerModelLoader = diarizerModelLoader
         self.vadLoader = vadLoader
         self.diarizerLoadOperationTimeout = diarizerLoadOperationTimeout
         self.diarizerDiagnostics = diarizerDiagnostics
+        self.openRouterMeetingClient = openRouterMeetingClient
     }
 
     private var _nemotron35Transcriber: Any?
@@ -321,7 +324,8 @@ actor TranscriptionCoordinator {
     }
 
     func transformAudioForQuil(
-        wavURL: URL, selectedText: String, appContext: String?, model: String
+        wavURL: URL, selectedText: String, appContext: String?, model: String,
+        appStyle: String? = nil
     ) async throws -> String {
         guard #available(macOS 15, *) else { throw QuilTransformationError.unsupportedModel }
         let gemmaModel = Gemma4LiteRTModel.resolved(model)
@@ -332,7 +336,8 @@ actor TranscriptionCoordinator {
         let prompt = QuilTransformationPrompt.userPrompt(
             selectedText: selectedText,
             instruction: "Carry out the spoken instruction in the attached audio.",
-            appContext: appContext
+            appContext: appContext,
+            appStyle: appStyle
         )
         let raw = try await gemma4LiteRTTranscriber.generateFromAudio(
             wavURL: wavURL, systemPrompt: QuilTransformationPrompt.audioSystem,
@@ -350,7 +355,8 @@ actor TranscriptionCoordinator {
         appContext: String?,
         backend: TranscriptCleanupBackendOption,
         model: String,
-        config: AppConfig
+        config: AppConfig,
+        appStyle: String? = nil
     ) async throws -> String {
         let trimmedInstruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstruction.isEmpty else { throw QuilTransformationError.emptyInstruction }
@@ -364,6 +370,7 @@ actor TranscriptionCoordinator {
             selectedText: selectedText,
             instruction: trimmedInstruction,
             appContext: appContext,
+            appStyle: appStyle,
             maxAppContextCharacters: QuilModelPolicy.appContextCharacterLimit(for: backend)
         )
         let raw = try await generateQuilReplacement(
@@ -384,6 +391,43 @@ actor TranscriptionCoordinator {
             )
             return try QuilTransformationOutput.validated(correctedRaw)
         }
+    }
+
+    func suggestProfessionVocabulary(_ description: String, excluding existing: [String]) async throws -> [String] {
+        guard #available(macOS 15, *) else { throw QuilTransformationError.unsupportedModel }
+        let option = PostProcessorOption.defaultQuilOption
+        guard option.isDownloaded else { throw QuilTransformationError.modelUnavailable }
+        let prompt = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, prompt.count <= 2_000 else { throw ProfessionVocabulary.ValidationError.invalidResponse }
+        let raw = try await qwen3PostProcessor.generate(prompt, configuration: .init(
+            modelURL: option.modelURL,
+            systemPrompt: ProfessionVocabulary.systemPrompt,
+            inputFormat: .configurable,
+            sampling: .vocabulary
+        ))
+        try Task.checkCancellation()
+        return try ProfessionVocabulary.parse(raw, excluding: existing)
+    }
+
+    /// Dedicated script-conversion stage, independent of optional transcript
+    /// cleanup. Callers retain the original transcript if this throws.
+    func romanizeHindi(_ text: String) async throws -> String {
+        guard HindiRomanization.spans(in: text).contains(where: \.requiresRomanization) else {
+            return text
+        }
+        guard #available(macOS 15, *) else {
+            throw TranscriptCleanupError.missingConfiguration("Hindi romanization requires macOS 15 or later.")
+        }
+        let option = PostProcessorOption.qwen35_0_8b
+        guard option.isDownloaded else {
+            throw TranscriptCleanupError.missingConfiguration("Download the Hindi romanization model to write Hindi using English letters.")
+        }
+        let configuration = Qwen3PostProcessor.Configuration(
+            modelURL: option.modelURL,
+            systemPrompt: HindiRomanization.systemPrompt,
+            inputFormat: .configurable
+        )
+        return try await qwen3PostProcessor.romanizeHindi(text, configuration: configuration)
     }
 
     private func generateQuilReplacement(
@@ -947,6 +991,7 @@ actor TranscriptionCoordinator {
         appContext: String? = nil
     ) async throws -> SpeechTranscriptionResult {
         // Qwen3 post-processing is intentionally dictation-only. Meeting transcription should keep raw backend/Parakeet output.
+        let romanizationEnabled = postProcessorConfig.romanizeHindi
         // Cohere decodes hallucinated text from silence — skip if VAD detects no speech
         if backend.backend == "cohere", let vadManager {
             do {
@@ -985,6 +1030,19 @@ actor TranscriptionCoordinator {
             postProcessorSnapshot: postProcessorSnapshot,
             appContext: appContext
         ) ?? removeFillersWithLogging(result)
+        if romanizationEnabled, backend.backend == "bodhan" {
+            do {
+                let romanized = try await romanizeHindi(result.text)
+                // Segment word timing belongs to the original script.
+                if romanized != result.text {
+                    result = SpeechTranscriptionResult(text: romanized, segments: [])
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                fputs("[muesli-native] Hindi romanization failed; preserving the transcript: \(error)\n", stderr)
+            }
+        }
         let final = applyCustomWords(result, customWords: customWords)
         if !final.text.isEmpty {
             Qwen3PostProcessorLogging.logVerbose("Dictation final transcript: \(final.text)")
@@ -995,6 +1053,7 @@ actor TranscriptionCoordinator {
     func transcribeMeeting(
         at url: URL,
         backend: BackendOption,
+        openRouter: OpenRouterDictationConfiguration? = nil,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
         bodhanLanguage: BodhanLanguage = BodhanLanguage.defaultLanguage,
         whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
@@ -1003,7 +1062,10 @@ actor TranscriptionCoordinator {
         appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier
     ) async throws -> SpeechTranscriptionResult {
         // Meetings intentionally skip Qwen/custom-word post-processing. Keep deterministic artifact/filler cleanup only.
-        cleanMeetingTranscript(try await route(
+        if let openRouter {
+            return try await transcribeHostedMeetingWAV(at: url, configuration: openRouter)
+        }
+        return cleanMeetingTranscript(try await route(
             url: url,
             backend: backend,
             cohereLanguage: cohereLanguage,
@@ -1018,6 +1080,7 @@ actor TranscriptionCoordinator {
     func transcribeMeetingChunk(
         at url: URL,
         backend: BackendOption,
+        openRouter: OpenRouterDictationConfiguration? = nil,
         cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
         bodhanLanguage: BodhanLanguage = BodhanLanguage.defaultLanguage,
         whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
@@ -1035,9 +1098,14 @@ actor TranscriptionCoordinator {
                     fputs("[muesli-native] VAD: chunk is silent, skipping transcription\n", stderr)
                     return SpeechTranscriptionResult(text: "", segments: [])
                 }
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 fputs("[muesli-native] VAD check failed, transcribing anyway: \(error)\n", stderr)
             }
+        }
+        if let openRouter {
+            return try await transcribeHostedMeetingWAV(at: url, configuration: openRouter)
         }
         return cleanMeetingTranscript(try await route(
             url: url,
@@ -1049,6 +1117,19 @@ actor TranscriptionCoordinator {
             parakeetLanguage: parakeetLanguage,
             appleSpeechLanguage: appleSpeechLanguage
         ))
+    }
+
+    /// Hosted timings are recording-piece bounds, never word-level estimates.
+    private func transcribeHostedMeetingWAV(at url: URL, configuration: OpenRouterDictationConfiguration) async throws -> SpeechTranscriptionResult {
+        try Task.checkCancellation()
+        do {
+            let result = try await HostedMeetingAudio.transcribe(url: url, configuration: configuration, client: openRouterMeetingClient)
+            try Task.checkCancellation()
+            return cleanMeetingTranscript(result)
+        } catch let failure as HostedMeetingAudio.PartialFailure {
+            throw HostedMeetingAudio.PartialFailure(result: cleanMeetingTranscript(failure.result),
+                completedThrough: failure.completedThrough, underlying: failure.underlying)
+        }
     }
 
     func diarizeSystemAudio(at url: URL) async throws -> DiarizationResult? {
@@ -1475,7 +1556,7 @@ actor TranscriptionCoordinator {
                 segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
             )
         } else {
-            throw NSError(domain: "Muesli", code: 1, userInfo: [
+            throw NSError(domain: "Muesli+", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Qwen3 ASR requires macOS 15 or later.",
             ])
         }
@@ -1533,7 +1614,7 @@ actor TranscriptionCoordinator {
                 segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
             )
         } else {
-            throw NSError(domain: "Muesli", code: 1, userInfo: [
+            throw NSError(domain: "Muesli+", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Cohere Transcribe requires macOS 15 or later.",
             ])
         }
@@ -1556,7 +1637,7 @@ actor TranscriptionCoordinator {
                 segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
             )
         } else {
-            throw NSError(domain: "Muesli", code: 1, userInfo: [
+            throw NSError(domain: "Muesli+", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Bodhan requires macOS 15 or later.",
             ])
         }
@@ -1576,7 +1657,7 @@ actor TranscriptionCoordinator {
                 segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
             )
         } else {
-            throw NSError(domain: "Muesli", code: 1, userInfo: [
+            throw NSError(domain: "Muesli+", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Nemotron 3.5 requires macOS 15 or later.",
             ])
         }

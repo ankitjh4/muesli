@@ -140,7 +140,7 @@ struct TimelineView: View {
             Text(emptyStateTitle)
                 .font(MuesliTheme.title3())
                 .foregroundStyle(MuesliTheme.textSecondary)
-            Text("Try another source, app, or time range")
+            Text(timelineEmptyStateInstruction)
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textTertiary)
             Spacer()
@@ -157,6 +157,18 @@ struct TimelineView: View {
         case .thisMac: return "No activity from this Mac"
         case .fromIPhone: return "No activity from iPhone"
         }
+    }
+
+    private var timelineEmptyStateInstruction: String {
+        if appState.timelineOriginFilter != .all
+            || appState.timelineDateFilter != .all
+            || appState.timelineApplicationFilter != nil {
+            return "Try another source, app, or time range"
+        }
+        if appState.config.enablePushToTalk {
+            return "Hold \(appState.config.dictationHotkey.label) to create your first dictation, or start a Quick Note in Meetings"
+        }
+        return "Start a voice note or a Quick Note meeting and it will appear here"
     }
 
     private var timelineScrollView: some View {

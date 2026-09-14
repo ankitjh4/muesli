@@ -122,7 +122,7 @@ public enum Nemotron35ModelStore {
         guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)") else {
             return nil
         }
-        guard let (data, response) = try? await URLSession.shared.data(from: url),
+        guard let (data, response) = try? await ModelNetworkPolicy.shared.data(for: URLRequest(url: url), session: .shared),
               let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -164,7 +164,7 @@ public enum Nemotron35ModelStore {
             throw Nemotron35ModelStoreError.invalidURL(apiURL)
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await ModelNetworkPolicy.shared.data(for: URLRequest(url: url), session: .shared)
         if let httpResponse = response as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
             throw Nemotron35ModelStoreError.httpError(httpResponse.statusCode, apiURL)

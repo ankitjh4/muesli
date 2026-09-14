@@ -159,6 +159,7 @@ enum TranscriptCleanupClient {
         maxOutputTokens: Int? = nil,
         logCategory: String = "generation"
     ) async throws -> String {
+        try InferenceRouting.requireHostedInferenceAllowed(config: config)
         guard let llmBackend = backend.llmBackend else {
             throw TranscriptCleanupError.missingConfiguration("Local generation is handled on device.")
         }

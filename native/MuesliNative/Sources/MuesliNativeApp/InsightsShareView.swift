@@ -43,7 +43,7 @@ struct InsightsShareSheet: View {
                         .overlay { ProgressView().controlSize(.small) }
                 }
             }
-            .accessibilityLabel("Preview of your Muesli activity image")
+            .accessibilityLabel("Preview of your Muesli+ activity image")
 
             if let saveErrorMessage {
                 HStack(alignment: .top, spacing: 10) {
@@ -125,7 +125,7 @@ struct InsightsShareSheet: View {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "Muesli activity – \(rangeLabel).png"
+        panel.nameFieldStringValue = "Muesli+ activity – \(rangeLabel).png"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             Task { @MainActor in
@@ -354,7 +354,7 @@ private struct MuesliShareMark: View {
                 .foregroundStyle(color)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Muesli")
+        .accessibilityLabel("Muesli+")
     }
 }
 

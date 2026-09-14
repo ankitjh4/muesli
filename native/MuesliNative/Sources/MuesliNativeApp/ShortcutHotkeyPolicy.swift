@@ -30,7 +30,7 @@ enum ShortcutHotkeyUpdateResult: Equatable {
 
 struct ShortcutHotkeyPolicy {
     static let conflictMessage = "These shortcuts need different keys."
-    static let commonGlobalShortcutWarning = "This shortcut is commonly used by other apps. Muesli listens globally, so choose a less common combination if it conflicts with your workflow."
+    static let commonGlobalShortcutWarning = "This shortcut is commonly used by other apps. Muesli+ listens globally, so choose a less common combination if it conflicts with your workflow."
     static let quilKeyCountMessage = "Quill supports one key or a two-key shortcut."
 
     static func isValidQuilShortcut(_ hotkey: HotkeyConfig) -> Bool {

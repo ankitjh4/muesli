@@ -11,9 +11,22 @@ struct OnboardingView: View {
     @State private var userName: String
     @State private var selectedUseCase: OnboardingUseCase
     @State private var selectedBackend: BackendOption
+    @State private var selectedMeetingBackend: BackendOption
     @State private var selectedCohereLanguage: CohereTranscribeLanguage
     @State private var summaryBackend: MeetingSummaryBackendOption = .chatGPT
     @State private var apiKey = ""
+    @State private var quillAPIKey = ""
+    @State private var vocabularySuggestions: [String] = []
+    @State private var selectedVocabulary = Set<String>()
+    @State private var vocabularyTask: Task<Void, Never>?
+    @State private var vocabularyGeneration = UUID()
+    @State private var vocabularyMessage: String?
+    @State private var vocabularyOnline = false
+    @State private var vocabularyModel = ""
+    @State private var vocabularyAPIKey = ""
+    @State private var quillEnabled: Bool
+    @State private var cleanupEnabled = true
+    @State private var quillBackend: TranscriptCleanupBackendOption
     @State private var isSigningInChatGPT = false
     @State private var chatGPTSignInDone = false
     @State private var chatGPTSignInError: String?
@@ -44,6 +57,7 @@ struct OnboardingView: View {
 
     // Model selection
     @State private var showMoreModels = false
+    @State private var customMenuBarEmoji: String
 
     // Dictation test
     @State private var isDictationTesting = false
@@ -62,6 +76,23 @@ struct OnboardingView: View {
     @State private var modelDownloadError: String?
     @State private var modelReadyIndicatorBackend: BackendOption?
     @State private var modelReadyIndicatorTask: Task<Void, Never>?
+
+    // Meeting transcription setup uses its own model so users can optimize
+    // long recordings independently from short dictation.
+    @State private var meetingModelDownloadTask: Task<Void, Never>?
+    @State private var meetingModelDownloadProgress: Double?
+    @State private var meetingModelDownloadStatus: String?
+    @State private var meetingModelDownloadError: String?
+    @State private var meetingModelReadyBackend: BackendOption?
+
+    // The first-run Quill setup supports the small private local model as well
+    // as the two easiest hosted account options.
+    @State private var isDownloadingQuillModel = false
+    @State private var quillModelDownloadProgress: Double?
+    @State private var quillModelDownloadStatus: String?
+    @State private var quillModelDownloadError: String?
+    @State private var quillModelDownloadTask: Task<Void, Never>?
+    @State private var quillModelDownloadGeneration = UUID()
 
     @State private var hasFinishedOnboarding = false
 
@@ -97,8 +128,12 @@ struct OnboardingView: View {
         return options
     }
 
-    private var onboardingModelDescription: String {
-        "Start with a fast local model. Larger models can download while you continue setup."
+    private var onboardingMeetingModels: [BackendOption] {
+        let candidates = [selectedMeetingBackend, selectedBackend] + BackendOption.onboarding
+        return candidates.reduce(into: [BackendOption]()) { result, option in
+            guard option.supportsMeetingTranscription, option.isCompatible(), !result.contains(option) else { return }
+            result.append(option)
+        }
     }
 
     init(
@@ -107,11 +142,15 @@ struct OnboardingView: View {
         initialStep: Int = 0,
         initialUserName: String = "",
         initialBackend: BackendOption = BackendOption.onboardingDefault,
+        initialMeetingBackend: BackendOption = BackendOption.onboardingDefault,
         initialCohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
         initialHotkey: HotkeyConfig = .default,
         initialSystemAudioRequested: Bool = false,
         initialUseCase: OnboardingUseCase = .dictation,
         initialSummaryBackend: MeetingSummaryBackendOption = .chatGPT,
+        initialQuillEnabled: Bool = false,
+        initialCleanupEnabled: Bool = true,
+        initialQuillBackend: TranscriptCleanupBackendOption = .local,
         initialModelDownloadProgress: Double? = nil,
         initialModelDownloadStatus: String? = nil
     ) {
@@ -140,12 +179,59 @@ struct OnboardingView: View {
             useCoreAudioTap: appState.config.useCoreAudioTap
         )
         let sanitizedInitialBackend = BackendOption.resolvedOnboardingBackend(initialBackend)
+        let sanitizedInitialMeetingBackend: BackendOption = {
+            guard initialMeetingBackend.supportsMeetingTranscription,
+                  initialMeetingBackend.isCompatible() else {
+                return sanitizedInitialBackend.supportsMeetingTranscription
+                    ? sanitizedInitialBackend : BackendOption.onboardingDefault
+            }
+            return initialMeetingBackend
+        }()
+        let supportedInitialQuillBackends: [TranscriptCleanupBackendOption] = [
+            .local,
+            .hosted(.chatGPT),
+            .hosted(.openRouter),
+        ]
+        let sanitizedInitialQuillBackend = supportedInitialQuillBackends.contains(initialQuillBackend)
+            ? initialQuillBackend : .local
         let modelGatedInitialStep = OnboardingFlow.modelGatedResumeStep(
             requestedStep: permissionGatedInitialStep,
             initialBackend: initialBackend,
             resolvedBackend: sanitizedInitialBackend
         )
-        let effectiveInitialStep = OnboardingFlow.normalizedStep(modelGatedInitialStep, for: initialUseCase)
+        let meetingGatedInitialStep = initialUseCase.includesMeetings
+            ? OnboardingFlow.setupGatedResumeStep(
+                requestedStep: modelGatedInitialStep,
+                setupStep: .meetingTranscription,
+                isReady: OnlineDictationSetupPolicy.isMeetingReady(config: appState.config,
+                    authenticated: appState.isOpenRouterAuthenticated,
+                    localModelReady: sanitizedInitialMeetingBackend.isDownloaded)
+            )
+            : modelGatedInitialStep
+        let initialQuillReady: Bool = {
+            guard initialQuillEnabled else { return true }
+            if sanitizedInitialQuillBackend.isOnDevice {
+                return PostProcessorOption.defaultQuilOption.isDownloaded
+            }
+            if sanitizedInitialQuillBackend == .hosted(.chatGPT) {
+                return ChatGPTAuthManager.shared.isAuthenticated
+            }
+            if sanitizedInitialQuillBackend == .hosted(.openRouter) {
+                return OnlineDictationSetupPolicy.isReady(
+                    authenticated: OpenRouterAuthManager.shared.isAuthenticated,
+                    modelID: OnboardingQuillModelSelection.openRouterModel(in: appState.config)
+                )
+            }
+            return false
+        }()
+        let quillGatedInitialStep = initialUseCase.includesDictation
+            ? OnboardingFlow.setupGatedResumeStep(
+                requestedStep: meetingGatedInitialStep,
+                setupStep: .quill,
+                isReady: initialQuillReady
+            )
+            : meetingGatedInitialStep
+        let effectiveInitialStep = OnboardingFlow.normalizedStep(quillGatedInitialStep, for: initialUseCase)
 
         _currentStep = State(initialValue: effectiveInitialStep)
         _hasCompletedPermissionsStep = State(initialValue: OnboardingFlow.hasCompletedPermissionsStep(
@@ -154,9 +240,16 @@ struct OnboardingView: View {
         _userName = State(initialValue: initialUserName)
         _selectedUseCase = State(initialValue: initialUseCase)
         _selectedBackend = State(initialValue: sanitizedInitialBackend)
+        _selectedMeetingBackend = State(initialValue: sanitizedInitialMeetingBackend)
         _selectedCohereLanguage = State(initialValue: initialCohereLanguage)
         _selectedHotkey = State(initialValue: initialHotkey)
         _summaryBackend = State(initialValue: initialSummaryBackend)
+        _quillEnabled = State(initialValue: initialQuillEnabled)
+        _cleanupEnabled = State(initialValue: initialCleanupEnabled)
+        _quillBackend = State(initialValue: sanitizedInitialQuillBackend)
+        _customMenuBarEmoji = State(
+            initialValue: MenuBarIconRenderer.emoji(from: appState.config.menuBarIcon) ?? ""
+        )
         _modelDownloadProgress = State(initialValue: sanitizedInitialBackend == initialBackend ? initialModelDownloadProgress : nil)
         _modelDownloadStatus = State(initialValue: sanitizedInitialBackend == initialBackend ? initialModelDownloadStatus : nil)
         _micGranted = State(initialValue: initialMicGranted)
@@ -174,9 +267,20 @@ struct OnboardingView: View {
                 case 1: modelStep
                 case 2: hotkeyStep
                 case 3: permissionsStep
-                case 4: dictationTestStep
+                case 4:
+                    if usesOnlineDictationSetup {
+                        onlineDictationTestStep
+                    } else {
+                        dictationTestStep
+                    }
                 case 5: meetingSummaryStep
                 case 6: calendarAccessStep
+                case 7: appearanceStep
+                case 8: learnStep
+                case 9: meetingTranscriptionStep
+                case 10: quillStep
+                case 11: reviewStep
+                case 12: vocabularyStep
                 default: EmptyView()
                 }
             }
@@ -186,12 +290,13 @@ struct OnboardingView: View {
 
             // Bottom bar
             HStack {
-                HStack(spacing: 6) {
-                    ForEach(Array(orderedSteps.enumerated()), id: \.offset) { _, step in
-                        Circle()
-                            .fill(step == currentStep ? MuesliTheme.accent : MuesliTheme.textTertiary)
-                            .frame(width: 7, height: 7)
-                    }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Step \(currentStepIndex + 1) of \(totalSteps)  ·  \(currentStepLabel)")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                    ProgressView(value: Double(currentStepIndex + 1), total: Double(totalSteps))
+                        .tint(MuesliTheme.accent)
+                        .frame(width: 220)
                 }
 
                 Spacer()
@@ -221,7 +326,7 @@ struct OnboardingView: View {
             .padding(.vertical, MuesliTheme.spacing16)
         }
         .background(MuesliTheme.backgroundBase)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .onAppear {
             saveProgress(atStep: currentStep)
         }
@@ -241,8 +346,27 @@ struct OnboardingView: View {
             resetModelDownloadForBackendChange()
             saveProgress(atStep: currentStep)
         }
-        .onChange(of: selectedBackend) { _, _ in
+        .onChange(of: selectedBackend) { previousBackend, newBackend in
+            if selectedMeetingBackend == previousBackend, newBackend.supportsMeetingTranscription {
+                selectedMeetingBackend = newBackend
+            }
             resetModelDownloadForBackendChange()
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: selectedMeetingBackend) { _, _ in
+            resetMeetingModelDownloadForBackendChange()
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: summaryBackend) { _, _ in
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: quillEnabled) { _, enabled in
+            if !enabled && !cleanupEnabled { cancelQuillModelDownload() }
+            saveProgress(atStep: currentStep)
+        }
+        .onChange(of: cleanupEnabled) { _, _ in saveProgress(atStep: currentStep) }
+        .onChange(of: quillBackend) { _, backend in
+            if !backend.isOnDevice && !cleanupEnabled { cancelQuillModelDownload() }
             saveProgress(atStep: currentStep)
         }
         .onChange(of: selectedCohereLanguage) { _, _ in
@@ -265,6 +389,61 @@ struct OnboardingView: View {
 
     // MARK: - Primary Button
 
+    private var currentStepLabel: String {
+        switch currentStep {
+        case 0: return "Welcome"
+        case 1: return "Dictation model"
+        case 2: return "Shortcut"
+        case 3: return "Permissions"
+        case 4: return "Try it"
+        case 5: return "Meeting summaries"
+        case 6: return "Calendar"
+        case 7: return "Appearance"
+        case 8: return "How it works"
+        case 9: return "Meeting model"
+        case 10: return "Quill"
+        case 11: return "Review"
+        case 12: return "Your vocabulary"
+        default: return "Setup"
+        }
+    }
+
+    private var isQuillReady: Bool {
+        guard quillEnabled else { return true }
+        if quillBackend.isOnDevice {
+            return PostProcessorOption.defaultQuilOption.isDownloaded
+        }
+        if quillBackend == .hosted(.chatGPT) {
+            return appState.isChatGPTAuthenticated || chatGPTSignInDone
+        }
+        if quillBackend == .hosted(.openRouter) {
+            return OnlineDictationSetupPolicy.isReady(
+                authenticated: hasOpenRouterCredentialForSetup,
+                modelID: OnboardingQuillModelSelection.openRouterModel(in: appState.config)
+            )
+        }
+        return false
+    }
+
+    private var hasOpenRouterCredentialForSetup: Bool {
+        appState.isOpenRouterAuthenticated
+            || openRouterSignInDone
+            || !quillAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (summaryBackend == .openRouter
+                && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private var usesOnlineMeetingSetup: Bool {
+        appState.config.useOpenRouterForMeetings && !appState.config.offlineInference
+    }
+
+    private var isSelectedMeetingModelReady: Bool {
+        OnlineDictationSetupPolicy.isMeetingReady(config: appState.config,
+            authenticated: appState.isOpenRouterAuthenticated,
+            localModelReady: meetingModelReadyBackend == selectedMeetingBackend
+                || (selectedMeetingBackend == selectedBackend && modelReadyBackend == selectedBackend))
+    }
+
     @ViewBuilder
     private var primaryButton: some View {
         switch currentStep {
@@ -273,42 +452,37 @@ struct OnboardingView: View {
                 goToNextStep()
             }
         case 1:
-            onboardingButton(selectedBackend.isDownloaded ? "Continue" : "Download & Continue", enabled: selectedBackend.isCompatible()) {
-                startDownload()
+            if usesOnlineDictationSetup {
+                onboardingButton("Continue", enabled: isOnlineDictationSetupReady) { goToNextStep() }
+            } else if modelReadyBackend == selectedBackend && isRomanizationModelReady {
+                onboardingButton("Continue", enabled: true) { goToNextStep() }
+            } else if isModelStillDownloading {
+                onboardingButton(isModelPreparingAfterDownload ? "Preparing model…" : "Downloading model…", enabled: false) {}
+            } else {
+                onboardingButton(selectedBackend.isDownloaded ? "Prepare model" : "Download model", enabled: selectedBackend.isCompatible()) {
+                    ensureModelDownloadStarted()
+                }
             }
         case 2:
             onboardingButton("Continue", enabled: true) {
                 goToNextStep()
             }
         case 3:
-            onboardingButton(currentStepIndex == orderedSteps.count - 1 ? "Finish" : "Continue", enabled: requiredPermissionsGranted) {
-                advancePastPermissions()
+            HStack(spacing: MuesliTheme.spacing12) {
+                if !requiredPermissionsGranted {
+                    skipButton("Explore without recording") { finishOnboarding(withKey: true) }
+                }
+                onboardingButton(currentStepIndex == orderedSteps.count - 1 ? "Finish" : "Continue", enabled: requiredPermissionsGranted) {
+                    advancePastPermissions()
+                }
             }
         case 4:
-            if dictationTestResult != nil {
-                onboardingButton(selectedUseCase.includesMeetings ? "Continue" : "Finish", enabled: true) {
-                    if selectedUseCase.includesMeetings {
-                        goToNextStep()
-                    } else {
-                        finishOnboarding(withKey: false)
-                    }
-                }
+            if usesOnlineDictationSetup || dictationTestResult != nil {
+                onboardingButton("Continue", enabled: true) { goToNextStep() }
             } else {
                 HStack(spacing: MuesliTheme.spacing12) {
-                    skipButton {
-                        if selectedUseCase.includesMeetings {
-                            goToNextStep()
-                        } else {
-                            finishOnboarding(withKey: false)
-                        }
-                    }
-                    onboardingButton(selectedUseCase.includesMeetings ? "Continue" : "Finish", enabled: false) {
-                        if selectedUseCase.includesMeetings {
-                            goToNextStep()
-                        } else {
-                            finishOnboarding(withKey: false)
-                        }
-                    }
+                    skipButton("Skip test") { goToNextStep() }
+                    onboardingButton("Continue", enabled: false) {}
                 }
             }
         case 5:
@@ -318,11 +492,41 @@ struct OnboardingView: View {
             }
         case 6:
             HStack(spacing: MuesliTheme.spacing12) {
-                skipButton("Not now") { finishOnboarding(withKey: true) }
-                onboardingButton("Finish", enabled: true) {
-                    finishOnboarding(withKey: true)
+                skipButton("Not now") { goToNextStep() }
+                onboardingButton("Continue", enabled: true) { goToNextStep() }
+            }
+        case 7:
+            onboardingButton("Continue", enabled: true) {
+                goToNextStep()
+            }
+        case 8:
+            onboardingButton("Set up my choices", enabled: true) { goToNextStep() }
+        case 9:
+            if usesOnlineMeetingSetup {
+                onboardingButton("Continue", enabled: isSelectedMeetingModelReady) { goToNextStep() }
+            } else if isSelectedMeetingModelReady {
+                onboardingButton("Continue", enabled: true) { goToNextStep() }
+            } else if meetingModelDownloadTask != nil {
+                onboardingButton("Preparing meeting model…", enabled: false) {}
+            } else {
+                onboardingButton(selectedMeetingBackend.isDownloaded ? "Prepare meeting model" : "Download meeting model", enabled: selectedMeetingBackend.isCompatible()) {
+                    startMeetingModelDownload()
                 }
             }
+        case 10:
+            if quillEnabled && quillBackend.isOnDevice && !PostProcessorOption.defaultQuilOption.isDownloaded {
+                onboardingButton(isDownloadingQuillModel ? "Downloading Quill model…" : "Download Quill model", enabled: !isDownloadingQuillModel) {
+                    startQuillModelDownload()
+                }
+            } else {
+                onboardingButton("Continue", enabled: isQuillReady) { goToNextStep() }
+            }
+        case 11:
+            onboardingButton("Finish setup", enabled: true) {
+                finishOnboarding(withKey: true)
+            }
+        case 12:
+            onboardingButton("Continue", enabled: vocabularyTask == nil) { goToNextStep() }
         default:
             EmptyView()
         }
@@ -382,7 +586,8 @@ struct OnboardingView: View {
     }
 
     private var isSelectedModelReadyForDictationTest: Bool {
-        modelReadyBackend == selectedBackend && !isModelStillDownloading && modelDownloadError == nil
+        !usesOnlineDictationSetup && modelReadyBackend == selectedBackend && isRomanizationModelReady
+            && !isModelStillDownloading && modelDownloadError == nil
     }
 
     private var canGoBack: Bool {
@@ -552,13 +757,13 @@ struct OnboardingView: View {
                 "Compiling CoreML files for the Neural Engine",
                 "Preparing the first dictation test",
                 "Future launches will skip most of this",
-                "We'll bring Muesli forward when ready",
+                "We'll bring Muesli+ forward when ready",
             ]
         }
         return [
             "Preparing the first dictation test",
             "Future launches will skip most of this",
-            "We'll bring Muesli forward when ready",
+            "We'll bring Muesli+ forward when ready",
         ]
     }
 
@@ -573,10 +778,10 @@ struct OnboardingView: View {
                 .interpolation(.high)
                 .scaledToFit()
                 .frame(width: 64, height: 64)
-                .accessibilityLabel("Muesli")
+                .accessibilityLabel("Muesli+")
 
             VStack(spacing: MuesliTheme.spacing8) {
-                Text("Welcome to Muesli")
+                Text("Welcome to Muesli+")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
@@ -599,7 +804,7 @@ struct OnboardingView: View {
             }
 
             VStack(spacing: MuesliTheme.spacing8) {
-                Text("What will you use Muesli for?")
+                Text("What will you use Muesli+ for?")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
 
@@ -613,7 +818,7 @@ struct OnboardingView: View {
                     useCaseCard(
                         icon: "waveform",
                         title: "Voice Notes",
-                        subtitle: "Record in Muesli",
+                        subtitle: "Record in Muesli+",
                         selected: selectedUseCase.includesVoiceNotes
                     ) {
                         toggleCapability(.voiceNotes)
@@ -694,16 +899,203 @@ struct OnboardingView: View {
         .animation(.easeInOut(duration: 0.18), value: selected)
     }
 
+    // MARK: - Learn the building blocks
+
+    private var learnStep: some View {
+        ScrollView {
+        VStack(spacing: 12) {
+            ConceptsView()
+            Toggle("Clean up spelling and spoken corrections automatically", isOn: $cleanupEnabled)
+                .toggleStyle(.switch)
+                .frame(maxWidth: 620)
+            Text("Recommended. Uses the small local language model once downloaded; nothing is sent online. You can turn this off in Settings.")
+                .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                .frame(maxWidth: 620, alignment: .leading)
+            if cleanupEnabled {
+                if #available(macOS 15.0, *) {
+                    if PostProcessorOption.defaultQuilOption.isDownloaded {
+                        Label("Local cleanup is ready", systemImage: "checkmark.circle.fill")
+                            .font(MuesliTheme.caption())
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button(isDownloadingQuillModel ? "Downloading local cleanup…" : "Download local cleanup (about 510 MB)") {
+                                startQuillModelDownload()
+                            }
+                            .disabled(isDownloadingQuillModel || appState.config.offlineInference)
+                            if let progress = quillModelDownloadProgress, isDownloadingQuillModel {
+                                ProgressView(value: progress)
+                            }
+                            if let message = quillModelDownloadError ?? quillModelDownloadStatus {
+                                Text(message).font(MuesliTheme.caption())
+                            }
+                            Text(appState.config.offlineInference
+                                 ? "Switch to online mode to download. Cleanup itself runs offline."
+                                 : "This download also powers Roman-letter Hindi, vocabulary suggestions, and local Quill. You can continue setup while it downloads.")
+                                .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                        }.frame(maxWidth: 620, alignment: .leading)
+                    }
+                } else {
+                    Text("Local cleanup requires macOS 15 or later. Your original transcript remains available.")
+                        .font(MuesliTheme.caption())
+                }
+            }
+        }
+        .padding(.bottom, 16)
+        }
+    }
+
+    /// Pure education surface: can be reviewed without saving onboarding progress
+    /// or requesting permissions from a preview/test process.
+    struct ConceptsView: View {
+    var body: some View {
+        VStack(spacing: MuesliTheme.spacing20) {
+            VStack(spacing: MuesliTheme.spacing8) {
+                Text("Four simple building blocks")
+                    .font(MuesliTheme.title1())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+
+                Text("Choose each part once now. Muesli+ will use those choices automatically, and you can change them later.")
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 590)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: MuesliTheme.spacing12, alignment: .top), GridItem(.flexible(), alignment: .top)],
+                spacing: MuesliTheme.spacing12
+            ) {
+                setupConceptCard(
+                    number: "1",
+                    icon: "waveform",
+                    title: "Dictation",
+                    explanation: "Listens to your microphone and writes the words you say.",
+                    privacy: "Local or OpenRouter · your choice"
+                )
+                setupConceptCard(
+                    number: "2",
+                    icon: "text.badge.checkmark",
+                    title: "Cleanup",
+                    explanation: "Optionally fixes spelling, grammar, and spoken corrections before your words are pasted. It should not rewrite your meaning.",
+                    privacy: "Separate language model · local or hosted"
+                )
+                setupConceptCard(
+                    number: "3",
+                    icon: "list.bullet.clipboard",
+                    title: "Meeting notes",
+                    explanation: "A speech model writes the transcript, on this Mac or online through OpenRouter. A separate optional language model turns that text into notes and action items.",
+                    privacy: "Local audio by default · online transcription shares audio"
+                )
+                setupConceptCard(
+                    number: "4",
+                    icon: "pencil.and.scribble",
+                    title: "Quill",
+                    explanation: "Highlight text, hold a shortcut, and say how you want it rewritten.",
+                    privacy: "Optional · local or hosted"
+                )
+            }
+            .frame(maxWidth: 620)
+
+            Label(
+                "Cleanup keeps your message: ‘Friday, sorry, Monday’ becomes ‘Monday’. Quill changes it only when you ask, for example ‘make this friendlier’. Review model output before sending.",
+                systemImage: "lightbulb.fill"
+            )
+            .font(MuesliTheme.caption())
+            .foregroundStyle(MuesliTheme.textSecondary)
+            .padding(.horizontal, MuesliTheme.spacing12)
+            .padding(.vertical, MuesliTheme.spacing8)
+            .background(MuesliTheme.accent.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
+            Label("Want to try speaking silently? After setup, open Lip dictation · Lab. It reads lip movements from a camera clip or video, then uses a small local language model to suggest English text. Both models must be installed; no microphone is used. This optional experiment can make mistakes—always review its suggestions.", systemImage: "video")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .frame(maxWidth: 620, alignment: .leading)
+        }
+        .padding(.horizontal, MuesliTheme.spacing32)
+        .padding(.top, MuesliTheme.spacing24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func setupConceptCard(
+        number: String,
+        icon: String,
+        title: String,
+        explanation: String,
+        privacy: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    .fill(MuesliTheme.accent.opacity(0.1))
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.accent)
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("\(number).  \(title)")
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(explanation)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(privacy)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(MuesliTheme.success)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(MuesliTheme.spacing12)
+        .frame(maxWidth: .infinity, minHeight: 116, alignment: .topLeading)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+    }
+
     // MARK: - Step 2: Model Selection
+
+    private var usesOnlineDictationSetup: Bool {
+        appState.config.resolvedDictationProvider == .openRouter
+    }
+
+    private var isOnlineDictationSetupReady: Bool {
+        OnlineDictationSetupPolicy.isReady(
+            authenticated: appState.isOpenRouterAuthenticated,
+            modelID: appState.config.openRouterDictationModel
+        )
+    }
+
+    private var onlineDictationTestStep: some View {
+        VStack(spacing: MuesliTheme.spacing16) {
+            Image(systemName: "network").font(.system(size: 32))
+            Text("Ready to try online dictation").font(MuesliTheme.title1())
+            Text("After finishing setup, hold \(selectedHotkey.label) and say a short sentence. Your audio will be sent to your selected OpenRouter provider; internet access and provider credits are required. No local speech-model download is needed.")
+                .font(MuesliTheme.body())
+                .multilineTextAlignment(.center)
+            Text("This setup screen has not tested the provider connection or transcription quality.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+        }
+        .padding(MuesliTheme.spacing32)
+    }
 
     private var modelStep: some View {
         VStack(spacing: MuesliTheme.spacing16) {
             VStack(spacing: MuesliTheme.spacing8) {
-                Text("Choose your transcription model")
+                Text("Choose how Muesli+ hears you")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text(onboardingModelDescription)
+                Text("Choose where dictation runs. Speech recognition turns your audio into text; a separate language model can clean up that text.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -712,7 +1104,67 @@ struct OnboardingView: View {
 
             ScrollView {
                 VStack(spacing: MuesliTheme.spacing8) {
-                    modelCard(option: BackendOption.onboardingDefault)
+                    Picker("Dictation runs", selection: Binding(
+                        get: { usesOnlineDictationSetup },
+                        set: { online in
+                            resetModelDownloadForBackendChange()
+                            controller.updateConfig {
+                                $0.dictationProvider = online ? DictationProvider.openRouter.rawValue : DictationProvider.local.rawValue
+                            }
+                        }
+                    )) {
+                        Text("On this Mac").tag(false)
+                        Text("Online · OpenRouter").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(appState.config.offlineInference)
+
+                    if usesOnlineDictationSetup {
+                        OnlineDictationSetupView(controller: controller, appState: appState)
+                    } else {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                        Text("What do you usually speak?")
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                        HStack(spacing: MuesliTheme.spacing8) {
+                            languageChoiceButton("English", icon: "textformat.abc", backend: .parakeetUnified)
+                            languageChoiceButton("Many languages", icon: "globe", backend: .parakeetMultilingual)
+                            languageChoiceButton("Hinglish", icon: "character.bubble", backend: .bodhanFlexInt8)
+                        }
+                    }
+                    .padding(MuesliTheme.spacing12)
+                    .background(MuesliTheme.accent.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                            .strokeBorder(MuesliTheme.accent.opacity(0.15), lineWidth: 1)
+                    )
+
+                    modelCard(option: selectedBackend)
+
+                    if selectedBackend.backend == "bodhan" {
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                            Toggle("Write Hindi in English letters", isOn: Binding(
+                                get: { controller.config.romanizeHindi },
+                                set: { enabled in
+                                    controller.updateConfig { $0.romanizeHindi = enabled }
+                                    resetModelDownloadForBackendChange()
+                                }
+                            ))
+                            .font(MuesliTheme.headline())
+                            Text("First, Bodhan Flex recognizes your Hindi and English speech. Then a small local language model writes the Hindi words in Roman letters—for example, नमस्ते becomes namaste. This is romanization, not translation.")
+                                .font(MuesliTheme.body())
+                            Text("Two downloads: the speech model shown above and Qwen3.5 0.8B (about 510 MB). Both stages run on this Mac after setup. English and numbers pass through unchanged. If romanization fails, your original transcript is kept.")
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                            Text("Experimental: Roman spellings may be inaccurate. Review the result before sending it.")
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.transcribing)
+                        }
+                        .padding(MuesliTheme.spacing16)
+                        .background(MuesliTheme.backgroundRaised)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                    }
 
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -731,7 +1183,7 @@ struct OnboardingView: View {
                     .padding(.top, MuesliTheme.spacing4)
 
                     if showMoreModels {
-                        ForEach(onboardingAlternativeModels, id: \.model) { option in
+                        ForEach(onboardingAlternativeModels.filter { $0 != selectedBackend }, id: \.model) { option in
                             modelCard(option: option)
                         }
 
@@ -746,12 +1198,31 @@ struct OnboardingView: View {
                     if selectedBackend.backend == BackendOption.cohereTranscribe.backend {
                         cohereLanguageCard
                     }
+                    }
                 }
                 .padding(.horizontal, MuesliTheme.spacing32)
             }
 
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func languageChoiceButton(_ title: String, icon: String, backend: BackendOption) -> some View {
+        let isSelected = selectedBackend == backend
+        return Button {
+            controller.updateConfig { $0.romanizeHindi = backend == .bodhanFlexInt8 }
+            selectedBackend = backend
+        } label: {
+            Label(title, systemImage: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isSelected ? .white : MuesliTheme.textSecondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(isSelected ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var cohereLanguageCard: some View {
@@ -818,7 +1289,7 @@ struct OnboardingView: View {
                             .font(MuesliTheme.caption())
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
-                    Text(option.description)
+                    Text(onboardingDescription(for: option))
                         .font(MuesliTheme.caption())
                         .foregroundStyle(incompatibilityReason == nil ? MuesliTheme.textSecondary : MuesliTheme.textTertiary)
                     if let incompatibilityReason {
@@ -843,7 +1314,211 @@ struct OnboardingView: View {
         .help(incompatibilityReason ?? option.label)
     }
 
-    // MARK: - Step 3: Permissions (sequential, one at a time)
+    private func onboardingDescription(for option: BackendOption) -> String {
+        if option == .parakeetUnified {
+            return "Best first choice for clear English dictation. Fast and accurate on Apple silicon."
+        } else if option == .parakeetMultilingual {
+            return "Choose this when you regularly speak languages other than English."
+        } else if option == .whisperHinglishRomanized {
+            return "For Hindi-English code-switching. Hindi is written in Roman letters while English stays English."
+        } else if option == .whisperTiny {
+            return "Smallest multilingual download. Quick to try, but less accurate with noise and accents."
+        } else if option == .whisperSmall {
+            return "A balanced multilingual model for accents, mixed audio, and everyday notes."
+        } else if option == .cohereTranscribe {
+            return "A very large model for difficult accents and audio. Slower, with no live words while speaking."
+        } else if option == .nemotron35Multilingual {
+            return "Shows live multilingual text as you speak. Best for users who value immediate feedback."
+        }
+        return option.description
+    }
+
+    // MARK: - Step 3: Appearance
+
+    private var appearanceStep: some View {
+        ScrollView {
+            VStack(spacing: MuesliTheme.spacing16) {
+                VStack(spacing: MuesliTheme.spacing4) {
+                    Text("Make Muesli+ yours")
+                        .font(MuesliTheme.title1())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+
+                    Text("Choose a light color theme and the menu bar icon you will recognize at a glance.")
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 560)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Color theme")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text("All six start in light mode. Dark mode is an optional switch below.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: MuesliTheme.spacing8), count: 6),
+                    spacing: MuesliTheme.spacing8
+                ) {
+                    ForEach(MuesliColorTheme.allCases) { theme in
+                        colorThemeButton(theme)
+                    }
+                }
+
+                Divider().background(MuesliTheme.surfaceBorder)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Menu bar icon")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text("All 34 built-in choices are shown below. Recording and transcribing keep their clear animated status icons.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                LazyVGrid(
+                    columns: Array(
+                        repeating: GridItem(.flexible(minimum: 58), spacing: MuesliTheme.spacing8),
+                        count: 7
+                    ),
+                    spacing: MuesliTheme.spacing8
+                ) {
+                    ForEach(MenuBarIconRenderer.options, id: \.id) { option in
+                        statusIconButton(option)
+                    }
+                }
+
+                HStack(spacing: MuesliTheme.spacing12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Use any emoji")
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                        Text("Click the field to open the macOS emoji picker.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                    }
+
+                    Spacer(minLength: MuesliTheme.spacing8)
+
+                    OnboardingEmojiField(text: $customMenuBarEmoji) { choice in
+                        selectStatusIcon(choice)
+                    }
+                    .frame(width: 150, height: 32)
+                }
+                .padding(.horizontal, MuesliTheme.spacing12)
+                .padding(.vertical, MuesliTheme.spacing8)
+                .background(MuesliTheme.backgroundRaised)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                .overlay(
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                )
+
+                Toggle("Use dark mode after setup", isOn: Binding(
+                    get: { appState.config.darkMode },
+                    set: { value in controller.updateConfig { $0.darkMode = value } }
+                ))
+                .toggleStyle(.switch)
+                .font(MuesliTheme.body())
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, MuesliTheme.spacing32)
+            .padding(.top, MuesliTheme.spacing20)
+            .padding(.bottom, MuesliTheme.spacing16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func colorThemeButton(_ theme: MuesliColorTheme) -> some View {
+        let isSelected = MuesliColorTheme.resolved(for: appState.config.recordingColorHex) == theme
+        return Button {
+            controller.updateConfig { $0.recordingColorHex = theme.hex }
+        } label: {
+            VStack(spacing: 6) {
+                Circle()
+                    .fill(Color(hex: theme.hex))
+                    .frame(width: 24, height: 24)
+                    .overlay {
+                        if isSelected {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                Text(theme.label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(isSelected ? Color(hex: theme.hex).opacity(0.10) : MuesliTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    .strokeBorder(isSelected ? Color(hex: theme.hex) : MuesliTheme.surfaceBorder, lineWidth: isSelected ? 1.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(theme.label) color theme")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func statusIconButton(_ option: MenuBarIconRenderer.Option) -> some View {
+        let isSelected = appState.config.menuBarIcon == option.id
+        return Button {
+            selectStatusIcon(option.id)
+        } label: {
+            VStack(spacing: 4) {
+                Group {
+                    if let image = MenuBarIconRenderer.make(choice: option.id) {
+                        Image(nsImage: image)
+                            .renderingMode(
+                                MenuBarIconRenderer.isEmojiChoice(option.id) ? .original : .template
+                            )
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        Image(systemName: "questionmark")
+                            .font(.system(size: 15, weight: .medium))
+                    }
+                }
+                .foregroundStyle(isSelected ? Color.white : MuesliTheme.textPrimary)
+                .frame(width: 20, height: 20)
+
+                Text(option.label)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(isSelected ? Color.white : MuesliTheme.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
+            }
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .padding(.horizontal, 3)
+            .background(isSelected ? MuesliTheme.accent : MuesliTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    .strokeBorder(isSelected ? MuesliTheme.accent : MuesliTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help(option.label)
+        .accessibilityLabel(option.label)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func selectStatusIcon(_ choice: String) {
+        customMenuBarEmoji = MenuBarIconRenderer.emoji(from: choice) ?? ""
+        controller.updateConfig { $0.menuBarIcon = choice }
+    }
+
+    // MARK: - Permissions (sequential, one at a time)
 
     /// The ordered list of permissions to grant during onboarding.
     /// Request the permission union for the capabilities selected during setup.
@@ -1013,7 +1688,7 @@ struct OnboardingView: View {
                     Button {
                         openApplicationsFolder()
                     } label: {
-                        Text("Need to add Muesli manually? Open Applications")
+                        Text("Need to add Muesli+ manually? Open Applications")
                             .font(.system(size: 11))
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
@@ -1333,11 +2008,17 @@ struct OnboardingView: View {
             userName: userName,
             selectedBackendKey: selectedBackend.backend,
             selectedModelKey: selectedBackend.model,
+            selectedMeetingBackendKey: selectedMeetingBackend.backend,
+            selectedMeetingModelKey: selectedMeetingBackend.model,
             selectedCohereLanguageCode: selectedCohereLanguage.rawValue,
             hotkeyKeyCode: selectedHotkey.keyCode,
             hotkeyLabel: selectedHotkey.label,
             systemAudioRequested: systemAudioGranted,
             onboardingUseCaseRawValue: selectedUseCase.rawValue,
+            summaryBackendKey: summaryBackend.backend,
+            quillEnabled: quillEnabled,
+            cleanupEnabled: cleanupEnabled,
+            quillBackendKey: quillBackend.backend,
             modelDownloadProgress: modelDownloadProgress,
             modelDownloadStatus: modelDownloadStatus
         )
@@ -1384,7 +2065,7 @@ struct OnboardingView: View {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
     }
 
-    // MARK: - Step 4: Hotkey Configuration
+    // MARK: - Hotkey Configuration
 
     private var hotkeyStep: some View {
         VStack(spacing: MuesliTheme.spacing24) {
@@ -1468,7 +2149,7 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Step 5: Dictation Test
+    // MARK: - Dictation Test
 
     private var dictationTestStep: some View {
         VStack(spacing: MuesliTheme.spacing24) {
@@ -1634,18 +2315,157 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Step 6: Meeting Summaries
+    // MARK: - Meeting Transcription
+
+    private var meetingTranscriptionStep: some View {
+        VStack(spacing: MuesliTheme.spacing16) {
+            VStack(spacing: MuesliTheme.spacing8) {
+                Text("Choose your meeting model")
+                    .font(MuesliTheme.title1())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+
+                Text("Choose where meeting audio becomes text. On the next screen, separately choose how that transcript becomes notes and action items.")
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 590)
+            }
+            .padding(.top, MuesliTheme.spacing24)
+
+            Picker("Meeting transcription runs", selection: Binding(
+                get: { usesOnlineMeetingSetup },
+                set: { online in
+                    resetMeetingModelDownloadForBackendChange()
+                    controller.updateConfig { $0.useOpenRouterForMeetings = online }
+                }
+            )) {
+                Text("On this Mac").tag(false)
+                Text("Online · OpenRouter").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(appState.config.offlineInference)
+            .padding(.horizontal, MuesliTheme.spacing32)
+
+            Label(usesOnlineMeetingSetup ? "No speech-model download needed. Internet access and provider credits are required."
+                  : "Using the same model for dictation and meetings saves disk space.", systemImage: usesOnlineMeetingSetup ? "network" : "internaldrive")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .padding(.horizontal, MuesliTheme.spacing12)
+                .padding(.vertical, 7)
+                .background(MuesliTheme.accent.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
+            ScrollView {
+                VStack(spacing: MuesliTheme.spacing8) {
+                    if usesOnlineMeetingSetup {
+                        OnlineDictationSetupView(controller: controller, appState: appState, forMeetings: true)
+                    } else {
+                    ForEach(onboardingMeetingModels, id: \.model) { option in
+                        meetingModelCard(option)
+                    }
+
+                    if let status = meetingModelDownloadStatus {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(status)
+                                    .font(MuesliTheme.caption())
+                                    .foregroundStyle(meetingModelDownloadError == nil ? MuesliTheme.textSecondary : MuesliTheme.recording)
+                                Spacer()
+                                if let progress = meetingModelDownloadProgress {
+                                    Text("\(Int(progress * 100))%")
+                                        .font(MuesliTheme.caption())
+                                        .foregroundStyle(MuesliTheme.textTertiary)
+                                }
+                            }
+                            if let progress = meetingModelDownloadProgress {
+                                ProgressView(value: min(max(progress, 0), 1))
+                                    .tint(MuesliTheme.accent)
+                            }
+                        }
+                        .padding(MuesliTheme.spacing12)
+                        .background(MuesliTheme.backgroundRaised)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+                    }
+                }
+                .padding(.horizontal, MuesliTheme.spacing32)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func meetingModelCard(_ option: BackendOption) -> some View {
+        let isSelected = selectedMeetingBackend == option
+        let sharedWithDictation = selectedUseCase.includesPushToTalk && option == selectedBackend
+        return Button {
+            selectedMeetingBackend = option
+        } label: {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Circle()
+                    .fill(isSelected ? MuesliTheme.accent : Color.clear)
+                    .frame(width: 16, height: 16)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(isSelected ? MuesliTheme.accent : MuesliTheme.textTertiary, lineWidth: 1.5)
+                    )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(option.label)
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                        Text(option.sizeLabel)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                        if sharedWithDictation {
+                            Text("Same as dictation")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(MuesliTheme.accent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(MuesliTheme.accent.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        }
+                    }
+                    Text(onboardingDescription(for: option))
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                if option.isDownloaded {
+                    Label("On Mac", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.success)
+                }
+            }
+            .padding(MuesliTheme.spacing12)
+            .background(MuesliTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                    .strokeBorder(isSelected ? MuesliTheme.accent : MuesliTheme.surfaceBorder, lineWidth: isSelected ? 1.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(option.label), \(option.sizeLabel)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    // MARK: - Meeting Summaries
 
     private var meetingSummaryStep: some View {
         VStack(spacing: MuesliTheme.spacing24) {
             Spacer()
 
             VStack(spacing: MuesliTheme.spacing8) {
-                Text("Meeting Summaries")
+                Text("Choose how meeting notes are made")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text("Connect an LLM provider to get AI-powered meeting notes.\nYou can set this up later in Settings.")
+                Text("First, your meeting model creates a transcript. Then this optional service reads that text and turns it into a summary and action items.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -1678,7 +2498,7 @@ struct OnboardingView: View {
             .frame(width: 320)
 
             if summaryBackend == .chatGPT {
-                Text("Use your ChatGPT Plus or Pro subscription.")
+                Text("Uses your ChatGPT Plus or Pro subscription. The transcript text—not the meeting audio—is sent to ChatGPT.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
 
@@ -1737,7 +2557,7 @@ struct OnboardingView: View {
                     }
                 }
             } else if summaryBackend == .ollama {
-                Text("Run AI models locally on your device with Ollama.\nNo API key needed — just install Ollama and pull a model.")
+                Text("Keep summary generation on your device with Ollama. Install Ollama separately and pull a text model before creating a summary.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -1757,7 +2577,7 @@ struct OnboardingView: View {
                     }
                 }
             } else if summaryBackend == .openRouter {
-                Text("Connect OpenRouter in your browser. Muesli receives a dedicated API key after you approve access.")
+                Text("The transcript text—not the meeting audio—is sent through OpenRouter to the model you choose.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -1875,12 +2695,449 @@ struct OnboardingView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - Quill
+
+    private var quillStep: some View {
+        ScrollView {
+        VStack(spacing: MuesliTheme.spacing16) {
+            VStack(spacing: MuesliTheme.spacing8) {
+                Text("Would you like voice-powered editing?")
+                    .font(MuesliTheme.title1())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+
+                Text("Quill is optional. Highlight text, hold \(appState.config.quilHotkey.label), and say something like “make this friendlier.”")
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 600)
+            }
+            .padding(.top, MuesliTheme.spacing24)
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: MuesliTheme.spacing8), GridItem(.flexible(), spacing: MuesliTheme.spacing8)],
+                spacing: MuesliTheme.spacing8
+            ) {
+                quillChoiceCard(
+                    icon: "pause.circle",
+                    title: "Not now",
+                    subtitle: "Keep Quill off. You can enable it later.",
+                    selected: !quillEnabled
+                ) {
+                    quillEnabled = false
+                }
+                quillChoiceCard(
+                    icon: "laptopcomputer",
+                    title: "Private on-device",
+                    subtitle: "Download Qwen 3.5 0.8B · about 533 MB",
+                    selected: quillEnabled && quillBackend.isOnDevice
+                ) {
+                    quillEnabled = true
+                    quillBackend = .local
+                }
+                quillChoiceCard(
+                    icon: "person.crop.circle",
+                    title: "Use ChatGPT",
+                    subtitle: "Uses your signed-in ChatGPT account.",
+                    selected: quillEnabled && quillBackend == .hosted(.chatGPT)
+                ) {
+                    quillEnabled = true
+                    quillBackend = .hosted(.chatGPT)
+                }
+                quillChoiceCard(
+                    icon: "network",
+                    title: "Use OpenRouter",
+                    subtitle: "Connect an account or enter an API key.",
+                    selected: quillEnabled && quillBackend == .hosted(.openRouter)
+                ) {
+                    quillEnabled = true
+                    quillBackend = .hosted(.openRouter)
+                }
+            }
+            .frame(maxWidth: 620)
+
+            quillSetupStatus
+                .frame(maxWidth: 620)
+
+            if quillEnabled && quillBackend == .hosted(.openRouter) && hasOpenRouterCredentialForSetup {
+                OpenRouterTextModelSetupView(controller: controller, appState: appState, modelID: Binding(
+                    get: { OnboardingQuillModelSelection.openRouterModel(in: appState.config) },
+                    set: { model in
+                        controller.updateConfig {
+                            $0.quilBackend = TranscriptCleanupBackendOption.hosted(.openRouter).backend
+                            $0.quilModel = model
+                        }
+                    }
+                ))
+                .frame(maxWidth: 620)
+            }
+
+            Label(
+                "Quill changes selected text. With no selection, it generates new text at the cursor.",
+                systemImage: "info.circle"
+            )
+            .font(MuesliTheme.caption())
+            .foregroundStyle(MuesliTheme.textSecondary)
+        }
+        .padding(.horizontal, MuesliTheme.spacing32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    private func quillChoiceCard(
+        icon: String,
+        title: String,
+        subtitle: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: MuesliTheme.spacing8) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(selected ? .white : MuesliTheme.accent)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(MuesliTheme.headline())
+                    Text(subtitle)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(selected ? Color.white.opacity(0.78) : MuesliTheme.textSecondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+            }
+            .foregroundStyle(selected ? .white : MuesliTheme.textPrimary)
+            .padding(MuesliTheme.spacing12)
+            .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
+            .background(selected ? MuesliTheme.accent : MuesliTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                    .strokeBorder(selected ? MuesliTheme.accent : MuesliTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var quillSetupStatus: some View {
+        if !quillEnabled {
+            onboardingStatusBox(
+                icon: "checkmark.circle.fill",
+                title: "Quill will stay off",
+                detail: "Nothing else to set up.",
+                color: MuesliTheme.success
+            )
+        } else if quillBackend.isOnDevice {
+            if PostProcessorOption.defaultQuilOption.isDownloaded {
+                onboardingStatusBox(
+                    icon: "checkmark.circle.fill",
+                    title: "Local Quill model is ready",
+                    detail: "Selected text and instructions stay on this Mac.",
+                    color: MuesliTheme.success
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(
+                        quillModelDownloadStatus ?? "The local Quill model needs to be downloaded.",
+                        systemImage: isDownloadingQuillModel ? "arrow.down.circle" : "internaldrive"
+                    )
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(quillModelDownloadError == nil ? MuesliTheme.textSecondary : MuesliTheme.recording)
+                    if let progress = quillModelDownloadProgress {
+                        ProgressView(value: min(max(progress, 0), 1))
+                            .tint(MuesliTheme.accent)
+                    }
+                }
+                .padding(MuesliTheme.spacing12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(MuesliTheme.backgroundRaised)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            }
+        } else if quillBackend == .hosted(.chatGPT) {
+            if appState.isChatGPTAuthenticated || chatGPTSignInDone {
+                onboardingStatusBox(
+                    icon: "checkmark.circle.fill",
+                    title: "ChatGPT is connected",
+                    detail: "Quill instructions and selected text are sent to ChatGPT.",
+                    color: MuesliTheme.success
+                )
+            } else if isSigningInChatGPT {
+                onboardingStatusBox(
+                    icon: "hourglass",
+                    title: "Waiting for ChatGPT sign-in",
+                    detail: "Finish signing in in your browser.",
+                    color: MuesliTheme.accent
+                )
+            } else {
+                VStack(spacing: 6) {
+                    onboardingActionButton("Sign in with ChatGPT", systemImage: "person.crop.circle") {
+                        isSigningInChatGPT = true
+                        chatGPTSignInError = nil
+                        Task {
+                            let error = await controller.signInWithChatGPT(selectMeetingSummaryBackend: false)
+                            isSigningInChatGPT = false
+                            chatGPTSignInDone = ChatGPTAuthManager.shared.isAuthenticated
+                            chatGPTSignInError = error
+                        }
+                    }
+                    if let chatGPTSignInError {
+                        Text(chatGPTSignInError)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.recording)
+                    }
+                }
+            }
+        } else if quillBackend == .hosted(.openRouter) {
+            if hasOpenRouterCredentialForSetup {
+                onboardingStatusBox(
+                    icon: "checkmark.circle.fill",
+                    title: "OpenRouter is connected",
+                    detail: "Quill instructions and selected text are sent to your chosen OpenRouter model.",
+                    color: MuesliTheme.success
+                )
+            } else if isSigningInOpenRouter {
+                onboardingStatusBox(
+                    icon: "hourglass",
+                    title: "Waiting for OpenRouter",
+                    detail: "Approve access in your browser.",
+                    color: MuesliTheme.accent
+                )
+            } else {
+                VStack(spacing: MuesliTheme.spacing8) {
+                    onboardingActionButton("Connect OpenRouter", systemImage: "network") {
+                        isSigningInOpenRouter = true
+                        openRouterSignInError = nil
+                        quillAPIKey = ""
+                        Task {
+                            let error = await controller.signInWithOpenRouter(selectMeetingSummaryBackend: false)
+                            isSigningInOpenRouter = false
+                            openRouterSignInDone = OpenRouterAuthManager.shared.isAuthenticated
+                            openRouterSignInError = error
+                        }
+                    }
+                    Text("or enter an API key")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                    PastableSecureField(
+                        text: quillAPIKey,
+                        placeholder: "sk-or-...",
+                        onChange: { quillAPIKey = $0 }
+                    )
+                    .frame(width: 320, height: 28)
+                    if let openRouterSignInError {
+                        Text(openRouterSignInError)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.recording)
+                    }
+                }
+            }
+        }
+    }
+
+    private func onboardingStatusBox(icon: String, title: String, detail: String, color: Color) -> some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            Image(systemName: icon)
+                .foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(detail)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+            Spacer()
+        }
+        .padding(MuesliTheme.spacing12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+    private func onboardingActionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, MuesliTheme.spacing16)
+                .padding(.vertical, MuesliTheme.spacing8)
+                .background(MuesliTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Actions
 
-    private func startDownload() {
-        guard selectedBackend.isCompatible() else { return }
-        ensureModelDownloadStarted()
-        goToNextStep()
+    private func startMeetingModelDownload() {
+        guard selectedMeetingBackend.isCompatible(), meetingModelDownloadTask == nil else { return }
+        if selectedMeetingBackend == selectedBackend, modelReadyBackend == selectedBackend {
+            meetingModelReadyBackend = selectedMeetingBackend
+            goToNextStep()
+            return
+        }
+
+        let backend = selectedMeetingBackend
+        meetingModelDownloadProgress = backend.isDownloaded ? nil : 0.02
+        meetingModelDownloadStatus = backend.isDownloaded
+            ? "Preparing \(backend.label) for meetings…"
+            : "Downloading \(backend.label)…"
+        meetingModelDownloadError = nil
+
+        meetingModelDownloadTask = Task {
+            do {
+                try await controller.downloadModelForOnboarding(
+                    backend,
+                    onboardingUseCase: .meetings
+                ) { progress, status in
+                    Task { @MainActor in
+                        guard selectedMeetingBackend == backend else { return }
+                        meetingModelDownloadProgress = min(max(progress, 0), 1)
+                        meetingModelDownloadStatus = status ?? "Preparing \(backend.label)…"
+                        meetingModelDownloadError = nil
+                    }
+                } progressSnapshot: { snapshot in
+                    Task { @MainActor in
+                        guard selectedMeetingBackend == backend else { return }
+                        meetingModelDownloadProgress = snapshot.fractionCompleted
+                        meetingModelDownloadStatus = snapshot.message
+                            ?? (snapshot.phase == .preparing ? "Preparing meeting model…" : "Downloading meeting model…")
+                    }
+                }
+                await MainActor.run {
+                    guard selectedMeetingBackend == backend else { return }
+                    meetingModelReadyBackend = backend
+                    meetingModelDownloadProgress = 1
+                    meetingModelDownloadStatus = "\(backend.label) is ready for meetings"
+                    meetingModelDownloadError = nil
+                    meetingModelDownloadTask = nil
+                    saveProgress(atStep: currentStep)
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard selectedMeetingBackend == backend else { return }
+                    meetingModelDownloadTask = nil
+                    meetingModelDownloadStatus = "Download paused"
+                }
+            } catch {
+                await MainActor.run {
+                    guard selectedMeetingBackend == backend else { return }
+                    meetingModelDownloadTask = nil
+                    meetingModelDownloadProgress = nil
+                    meetingModelDownloadError = error.localizedDescription
+                    meetingModelDownloadStatus = "Meeting model setup failed. Check your connection and try again."
+                }
+            }
+        }
+    }
+
+    private func resetMeetingModelDownloadForBackendChange() {
+        meetingModelDownloadTask?.cancel()
+        meetingModelDownloadTask = nil
+        if let meetingModelReadyBackend, meetingModelReadyBackend != selectedMeetingBackend {
+            self.meetingModelReadyBackend = nil
+        }
+        meetingModelDownloadProgress = nil
+        meetingModelDownloadStatus = nil
+        meetingModelDownloadError = nil
+    }
+
+    private func startQuillModelDownload() {
+        let option = PostProcessorOption.defaultQuilOption
+        guard !option.isDownloaded, quillModelDownloadTask == nil, !appState.config.offlineInference else { return }
+        let generation = UUID()
+        quillModelDownloadGeneration = generation
+
+        isDownloadingQuillModel = true
+        quillModelDownloadProgress = 0.02
+        quillModelDownloadStatus = "Downloading the local language model…"
+        quillModelDownloadError = nil
+
+        quillModelDownloadTask = Task {
+            do {
+                let fileManager = FileManager.default
+                try fileManager.createDirectory(at: option.cacheDirectory, withIntermediateDirectories: true)
+                let manifest = ModelDownloadManifest(
+                    id: option.id,
+                    version: "main",
+                    files: [ModelDownloadFile(relativePath: option.filename, remoteURL: option.downloadURL)],
+                    maximumConcurrency: 1
+                )
+                try await ModelDownloadCoordinator.shared.download(manifest, to: option.cacheDirectory) { snapshot in
+                    Task { @MainActor in
+                        guard quillModelDownloadGeneration == generation else { return }
+                        quillModelDownloadProgress = snapshot.fractionCompleted
+                        quillModelDownloadStatus = snapshot.message ?? "Downloading the local language model…"
+                    }
+                }
+                try Task.checkCancellation()
+
+                let header = try Data(contentsOf: option.modelURL, options: [.mappedIfSafe]).prefix(4)
+                guard header.elementsEqual(Data("GGUF".utf8)) else {
+                    try? fileManager.removeItem(at: option.modelURL)
+                    throw NSError(
+                        domain: "MuesliOnboardingQuillDownload",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "The downloaded language model was incomplete. Please try again."]
+                    )
+                }
+
+                await MainActor.run {
+                    guard quillModelDownloadGeneration == generation else { return }
+                    quillModelDownloadGeneration = UUID()
+                    isDownloadingQuillModel = false
+                    quillModelDownloadTask = nil
+                    quillModelDownloadProgress = 1
+                    quillModelDownloadStatus = "Local language model is ready"
+                    quillModelDownloadError = nil
+                    saveProgress(atStep: currentStep)
+                    if hasFinishedOnboarding && appState.config.pendingLocalCleanupSetup {
+                        controller.preloadExperimentalTranscriptionFeatures()
+                    }
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard quillModelDownloadGeneration == generation else { return }
+                    quillModelDownloadGeneration = UUID()
+                    isDownloadingQuillModel = false
+                    quillModelDownloadTask = nil
+                    quillModelDownloadStatus = "Download paused. Select Download to resume."
+                }
+            } catch {
+                await MainActor.run {
+                    guard quillModelDownloadGeneration == generation else { return }
+                    quillModelDownloadGeneration = UUID()
+                    isDownloadingQuillModel = false
+                    quillModelDownloadTask = nil
+                    quillModelDownloadProgress = nil
+                    quillModelDownloadStatus = "Language model download failed. Check your connection and try again."
+                    quillModelDownloadError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func cancelQuillModelDownload() {
+        guard quillModelDownloadTask != nil else { return }
+        quillModelDownloadGeneration = UUID()
+        quillModelDownloadTask?.cancel()
+        quillModelDownloadTask = nil
+        isDownloadingQuillModel = false
+        quillModelDownloadProgress = nil
+        quillModelDownloadStatus = nil
+        quillModelDownloadError = nil
+        Task {
+            await ModelDownloadCoordinator.shared.cancel(modelID: PostProcessorOption.defaultQuilOption.id)
+        }
     }
 
     private func startDictationTestMonitorIfReady() {
@@ -1921,12 +3178,20 @@ struct OnboardingView: View {
         }
     }
 
+    private var needsRomanizationModel: Bool {
+        selectedBackend.backend == "bodhan" && controller.config.romanizeHindi
+    }
+
+    private var isRomanizationModelReady: Bool {
+        !needsRomanizationModel || PostProcessorOption.qwen35_0_8b.isDownloaded
+    }
+
     private func ensureModelDownloadStarted() {
         if let reason = selectedBackend.incompatibilityReason() {
             modelDownloadError = reason
             return
         }
-        if modelReadyBackend == selectedBackend {
+        if modelReadyBackend == selectedBackend && isRomanizationModelReady {
             isModelStillDownloading = false
             modelDownloadProgress = 1.0
             isModelPreparingAfterDownload = false
@@ -1955,6 +3220,7 @@ struct OnboardingView: View {
         }
 
         let backend = selectedBackend
+        let downloadRomanizationModel = needsRomanizationModel
         let useCase = selectedUseCase
         let generation = UUID()
         let alreadyDownloaded = backend.isDownloaded
@@ -1986,6 +3252,32 @@ struct OnboardingView: View {
                 }
             }
             do {
+                if downloadRomanizationModel {
+                    let option = PostProcessorOption.qwen35_0_8b
+                    if !option.isDownloaded {
+                        modelDownloadStatus = "Downloading the local Hindi romanization model (about 510 MB)…"
+                        try FileManager.default.createDirectory(at: option.cacheDirectory, withIntermediateDirectories: true)
+                        let manifest = ModelDownloadManifest(
+                            id: option.id,
+                            version: "main",
+                            files: [ModelDownloadFile(relativePath: option.filename, remoteURL: option.downloadURL)],
+                            maximumConcurrency: 1
+                        )
+                        try await ModelDownloadCoordinator.shared.download(manifest, to: option.cacheDirectory) { snapshot in
+                            Task { @MainActor in
+                                guard modelDownloadGeneration == generation, selectedBackend == backend else { return }
+                                modelDownloadProgress = snapshot.fractionCompleted
+                                modelDownloadStatus = "Downloading local romanization model…"
+                            }
+                        }
+                    }
+                    try Task.checkCancellation()
+                    let header = try Data(contentsOf: option.modelURL, options: [.mappedIfSafe]).prefix(4)
+                    guard header.elementsEqual(Data("GGUF".utf8)) else {
+                        throw NSError(domain: "MuesliRomanizationSetup", code: 1,
+                                      userInfo: [NSLocalizedDescriptionKey: "The romanization model is incomplete. Download it again in Models."])
+                    }
+                }
                 try await controller.downloadModelForOnboarding(backend, onboardingUseCase: useCase) { progress, status in
                     Task { @MainActor in
                         guard modelDownloadGeneration == generation,
@@ -2187,7 +3479,7 @@ struct OnboardingView: View {
 
     private func modelPreparationFailureMessage(for backend: BackendOption) -> String {
         backend.isDownloaded
-            ? "Model setup failed. Restart Muesli or retry from Models."
+            ? "Model setup failed. Restart Muesli+ or retry from Models."
             : "Download failed. Check your connection and retry."
     }
 
@@ -2247,7 +3539,7 @@ struct OnboardingView: View {
                 .resizable()
                 .frame(width: 80, height: 80)
                 .accessibilityHidden(true)
-            Text("Bring your meetings into Muesli")
+            Text("Bring your meetings into Muesli+")
                 .font(MuesliTheme.title1())
                 .foregroundStyle(MuesliTheme.textPrimary)
             Text("Allow access to macOS Calendar to see upcoming meetings and get reminders.")
@@ -2266,6 +3558,276 @@ struct OnboardingView: View {
         }
         .multilineTextAlignment(.center)
         .padding(.horizontal, MuesliTheme.spacing32)
+    }
+
+    // MARK: - Review
+
+    private var vocabularyStep: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                Text("Teach Muesli+ your vocabulary").font(MuesliTheme.title1())
+                Text("What do you work on? Tell us about your role, tools, and topics. We’ll suggest specialist words for you to review. This step is optional.")
+                    .font(MuesliTheme.body()).foregroundStyle(MuesliTheme.textSecondary)
+                TextField("For example: I’m a developer working with Swift, Kubernetes, and PostgreSQL.", text: Binding(
+                    get: { appState.config.professionDescription },
+                    set: { value in
+                        vocabularyGeneration = UUID()
+                        vocabularyTask?.cancel()
+                        vocabularyTask = nil
+                        vocabularySuggestions = []
+                        selectedVocabulary = []
+                        vocabularyMessage = nil
+                        controller.updateConfig { $0.professionDescription = String(value.prefix(2_000)) }
+                    }
+                ), axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(4...8)
+                .accessibilityLabel("Describe your work and vocabulary")
+                if !appState.config.offlineInference {
+                    Toggle("Use OpenRouter for vocabulary suggestions", isOn: $vocabularyOnline)
+                        .disabled(vocabularyTask != nil)
+                }
+                Text("Nothing is added to the dictionary until you select Save.")
+                    .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                if vocabularyOnline && !appState.config.offlineInference {
+                    Text("Your work description will be sent to OpenRouter and the selected provider when you choose Suggest words. Do not include confidential details. Provider charges may apply.")
+                        .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                    if !appState.isOpenRouterAuthenticated {
+                        SecureField("OpenRouter API key", text: $vocabularyAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Save API key") {
+                            vocabularyMessage = controller.storeManualOpenRouterAPIKey(vocabularyAPIKey, selectMeetingSummaryBackend: false)
+                            if vocabularyMessage == nil { vocabularyAPIKey = "" }
+                        }
+                    }
+                    OpenRouterTextModelSetupView(controller: controller, appState: appState, modelID: $vocabularyModel)
+                        .disabled(vocabularyTask != nil)
+                } else {
+                    Text("Suggestions run on this Mac using the downloaded language model. Your description is not sent to a hosted AI provider.")
+                        .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                }
+                if !(vocabularyOnline && !appState.config.offlineInference) && !PostProcessorOption.defaultQuilOption.isDownloaded {
+                    Button(isDownloadingQuillModel ? "Downloading local language model…" : "Download local language model (about 510 MB)") {
+                        startQuillModelDownload()
+                    }
+                    .disabled(isDownloadingQuillModel || appState.config.offlineInference)
+                    if let quillModelDownloadError {
+                        Text(quillModelDownloadError).foregroundStyle(MuesliTheme.transcribing)
+                    }
+                } else {
+                    Button(vocabularyTask == nil ? "Suggest words" : "Finding useful words…") {
+                        generateVocabularySuggestions()
+                    }
+                    .disabled(vocabularyTask != nil || appState.config.professionDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || (vocabularyOnline && !appState.config.offlineInference && (!appState.isOpenRouterAuthenticated || vocabularyModel.isEmpty)))
+                }
+                if !vocabularySuggestions.isEmpty {
+                    Text("Review the spellings and uncheck anything you don’t use.").font(MuesliTheme.headline())
+                    ForEach(vocabularySuggestions, id: \.self) { word in
+                        Toggle(word, isOn: Binding(
+                            get: { selectedVocabulary.contains(word) },
+                            set: { enabled in
+                                if enabled { selectedVocabulary.insert(word) }
+                                else { selectedVocabulary.remove(word) }
+                            }
+                        ))
+                        .toggleStyle(.checkbox)
+                    }
+                    Button("Save \(selectedVocabulary.count) words to my dictionary") {
+                        let selected = vocabularySuggestions.filter { selectedVocabulary.contains($0) }
+                        var added = 0
+                        controller.updateConfig { config in
+                            for word in selected where !config.customWords.contains(where: { $0.targetWord.lowercased() == word.lowercased() }) {
+                                config.customWords.append(CustomWord(word: word, replacement: word))
+                                added += 1
+                            }
+                        }
+                        vocabularySuggestions = []
+                        selectedVocabulary = []
+                        vocabularyMessage = "Saved \(added) words. You can review, edit, or remove them in Dictionary after setup."
+                    }
+                    .disabled(selectedVocabulary.isEmpty)
+                }
+                if let vocabularyMessage {
+                    Text(vocabularyMessage).font(MuesliTheme.body())
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("You can also add names or terms manually in Dictionary at any time.")
+                    .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+            }
+            .padding(MuesliTheme.spacing32)
+        }
+        .onDisappear {
+            vocabularyGeneration = UUID()
+            vocabularyTask?.cancel()
+            vocabularyTask = nil
+        }
+    }
+
+    private func generateVocabularySuggestions() {
+        let generation = UUID()
+        vocabularyGeneration = generation
+        vocabularyMessage = nil
+        let description = controller.config.professionDescription
+        let existing = controller.config.customWords.flatMap { [$0.word, $0.targetWord] }
+        let config = controller.config
+        let useOnline = vocabularyOnline && !config.offlineInference
+        let model = vocabularyModel
+        vocabularyTask = Task { @MainActor in
+            defer { if vocabularyGeneration == generation { vocabularyTask = nil } }
+            do {
+                let words: [String]
+                if useOnline {
+                    words = try await HostedProfessionVocabulary.suggest(description, excluding: existing, model: model, config: config)
+                } else {
+                    words = try await controller.transcriptionCoordinator.suggestProfessionVocabulary(description, excluding: existing)
+                }
+                guard !Task.isCancelled, vocabularyGeneration == generation else { return }
+                vocabularySuggestions = words
+                selectedVocabulary = Set(words)
+                if words.isEmpty { vocabularyMessage = "No new terms found. Try naming a few tools or topics you work with, or continue and add words manually later." }
+            } catch is CancellationError {
+            } catch {
+                guard vocabularyGeneration == generation else { return }
+                vocabularyMessage = "Couldn’t generate a usable word list. Try a shorter description, or continue and add words manually in Dictionary."
+            }
+        }
+    }
+
+    private var reviewStep: some View {
+        VStack(spacing: MuesliTheme.spacing16) {
+            VStack(spacing: MuesliTheme.spacing8) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 36, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.success)
+                Text("You're ready to use Muesli+")
+                    .font(MuesliTheme.title1())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text("Here is what Muesli+ will use. Choose Change if anything does not look right.")
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+            .multilineTextAlignment(.center)
+            .padding(.top, MuesliTheme.spacing20)
+
+            ScrollView {
+                VStack(spacing: MuesliTheme.spacing8) {
+                    if selectedUseCase.includesPushToTalk {
+                        reviewRow(
+                            icon: "waveform",
+                            title: "Dictation",
+                            value: selectedBackend.label,
+                            detail: "Hold \(selectedHotkey.label), speak, then release",
+                            editStep: OnboardingFlow.Step.model.rawValue
+                        )
+                    }
+                    if selectedUseCase.includesMeetings {
+                        reviewRow(
+                            icon: "person.2.fill",
+                            title: "Meeting transcript",
+                            value: usesOnlineMeetingSetup ? appState.config.openRouterMeetingModel : selectedMeetingBackend.label,
+                            detail: usesOnlineMeetingSetup ? "Audio is sent through OpenRouter; provider charges may apply" : "Audio is transcribed locally on this Mac",
+                            editStep: OnboardingFlow.Step.meetingTranscription.rawValue
+                        )
+                        reviewRow(
+                            icon: "list.bullet.clipboard",
+                            title: "Meeting summary",
+                            value: summaryBackend.label,
+                            detail: meetingSummaryReviewDetail,
+                            editStep: OnboardingFlow.Step.meetingSummary.rawValue
+                        )
+                    }
+                    if selectedUseCase.includesDictation {
+                        reviewRow(
+                            icon: "pencil.and.scribble",
+                            title: "Quill",
+                            value: quillEnabled ? quillBackend.label : "Off",
+                            detail: quillEnabled
+                                ? "Hold \(appState.config.quilHotkey.label) to rewrite selected text"
+                                : "You can enable voice editing later in Settings",
+                            editStep: OnboardingFlow.Step.quill.rawValue
+                        )
+                    }
+                    reviewRow(
+                        icon: "paintpalette.fill",
+                        title: "Appearance",
+                        value: MuesliColorTheme.resolved(for: appState.config.recordingColorHex).label,
+                        detail: appState.config.darkMode ? "Dark mode after setup" : "Light mode after setup",
+                        editStep: OnboardingFlow.Step.appearance.rawValue
+                    )
+                    reviewRow(
+                        icon: "hand.raised.fill",
+                        title: "Privacy permissions",
+                        value: requiredPermissionsGranted ? "Ready" : "Needs attention",
+                        detail: "Only the permissions required for your selected features",
+                        editStep: OnboardingFlow.Step.permissions.rawValue
+                    )
+                }
+                .padding(.horizontal, MuesliTheme.spacing32)
+            }
+
+            Text("Nothing here is permanent. Every choice can be changed later in Settings or Models.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .padding(.bottom, MuesliTheme.spacing4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var meetingSummaryReviewDetail: String {
+        if summaryBackend == .chatGPT {
+            return (appState.isChatGPTAuthenticated || chatGPTSignInDone)
+                ? "ChatGPT account connected" : "Not connected yet; summaries can be set up later"
+        } else if summaryBackend == .openRouter {
+            return (appState.isOpenRouterAuthenticated || openRouterSignInDone || !apiKey.isEmpty)
+                ? "OpenRouter connected" : "Not connected yet; summaries can be set up later"
+        } else if summaryBackend == .openAI {
+            return apiKey.isEmpty ? "No API key entered yet" : "API key entered"
+        } else if summaryBackend == .ollama {
+            return "Uses Ollama running on this Mac"
+        }
+        return "Provider selected"
+    }
+
+    private func reviewRow(
+        icon: String,
+        title: String,
+        value: String,
+        detail: String,
+        editStep: Int
+    ) -> some View {
+        HStack(spacing: MuesliTheme.spacing12) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(MuesliTheme.accent)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                Text(value)
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(detail)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+            Spacer()
+            Button("Change") {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    currentStep = editStep
+                }
+            }
+            .buttonStyle(.link)
+            .font(MuesliTheme.caption())
+        }
+        .padding(MuesliTheme.spacing12)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
     }
 
     private func finishOnboarding(withKey: Bool) {
@@ -2293,14 +3855,21 @@ struct OnboardingView: View {
                 isComplete: modelReadyBackend == selectedBackend
             )
         }
+        let dictationBackend = selectedUseCase.includesPushToTalk
+            ? selectedBackend : selectedMeetingBackend
         controller.completeOnboarding(
             userName: userName.trimmingCharacters(in: .whitespaces),
-            backend: selectedBackend,
+            backend: dictationBackend,
+            meetingBackend: selectedMeetingBackend,
             cohereLanguage: selectedCohereLanguage,
             hotkey: selectedHotkey,
             onboardingUseCase: selectedUseCase,
             summaryBackend: summaryBackend,
-            apiKey: withKey ? apiKey : nil
+            apiKey: withKey ? apiKey : nil,
+            quillEnabled: quillEnabled,
+            quillBackend: quillBackend,
+            quillAPIKey: withKey ? quillAPIKey : nil,
+            cleanupEnabled: cleanupEnabled
         )
     }
 }
@@ -2405,6 +3974,64 @@ class EditableNSTextField: NSTextField {
             }
         }
         return super.performKeyEquivalent(with: event)
+    }
+}
+
+/// A focused emoji field that opens the macOS character palette when clicked.
+/// Selecting all existing text first makes the next emoji replace the prior choice.
+final class EmojiPickerNSTextField: EditableNSTextField {
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        currentEditor()?.selectAll(nil)
+        DispatchQueue.main.async {
+            NSApp.orderFrontCharacterPalette(nil)
+        }
+    }
+}
+
+struct OnboardingEmojiField: NSViewRepresentable {
+    @Binding var text: String
+    let onValidEmoji: (String) -> Void
+
+    func makeNSView(context: Context) -> EmojiPickerNSTextField {
+        let field = EmojiPickerNSTextField()
+        field.placeholderString = "Choose emoji"
+        field.font = .systemFont(ofSize: 18)
+        field.alignment = .center
+        field.isBordered = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.delegate = context.coordinator
+        field.stringValue = text
+        field.toolTip = "Click to open the macOS emoji picker"
+        return field
+    }
+
+    func updateNSView(_ nsView: EmojiPickerNSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onValidEmoji: onValidEmoji)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        @Binding var text: String
+        let onValidEmoji: (String) -> Void
+
+        init(text: Binding<String>, onValidEmoji: @escaping (String) -> Void) {
+            _text = text
+            self.onValidEmoji = onValidEmoji
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text = field.stringValue
+            guard let choice = MenuBarIconRenderer.choice(forEmoji: field.stringValue) else { return }
+            onValidEmoji(choice)
+        }
     }
 }
 

@@ -5,7 +5,7 @@ import Foundation
 import MuesliCore
 import UniformTypeIdentifiers
 
-/// Handles importing audio files (m4a, mp4, wav, mp3) for offline transcription.
+/// Handles importing audio files (m4a, mp4, wav, mp3) using the selected meeting route.
 /// Converts the source file to 16kHz mono WAV, transcribes it, optionally runs
 /// speaker diarization, and creates a meeting record with the result.
 enum AudioFileImportController {
@@ -135,6 +135,19 @@ enum AudioFileImportController {
         let backend: BackendOption
         let transcriptionCoordinator: TranscriptionCoordinator
         let templateSnapshot: MeetingTemplateSnapshot
+        var hostedTranscription: OpenRouterDictationConfiguration? = nil
+        var supportDirectory: URL = AppIdentity.supportDirectoryURL
+        var networkPolicy: ModelNetworkPolicy = .shared
+    }
+
+    struct NoteGeneration {
+        var title: (String, AppConfig) async -> String? = { transcript, config in
+            await MeetingSummaryClient.generateTitle(transcript: transcript, config: config)
+        }
+        var summary: (String, String, AppConfig, MeetingTemplateSnapshot) async throws -> String = { transcript, title, config, template in
+            try await MeetingSummaryClient.summarize(transcript: transcript, meetingTitle: title,
+                config: config, template: template, existingNotes: nil, manualNotesToRetain: "")
+        }
     }
 
     /// Runs the full import pipeline: convert, transcribe, diarize, format, persist, summarize.
@@ -142,32 +155,41 @@ enum AudioFileImportController {
         sourceURL: URL,
         title: String,
         controller: MuesliController,
+        context suppliedContext: ImportContext? = nil,
+        noteGeneration: NoteGeneration = NoteGeneration(),
         progress: @escaping (String) -> Void
     ) async throws -> ImportResult {
+        let context: ImportContext
+        if let suppliedContext { context = suppliedContext }
+        else { context = await controller.audioFileImportContext() }
+        if let hosted = context.hostedTranscription {
+            try OpenRouterTranscriptionClient(networkPolicy: context.networkPolicy).validateAccess(configuration: hosted)
+        }
         progress("Converting audio file...")
         let (wavURL, duration) = try await convertToWAV(sourceURL: sourceURL)
         defer { try? FileManager.default.removeItem(at: wavURL) }
 
         try Task.checkCancellation()
 
-        let context = await controller.audioFileImportContext()
         let config = context.config
         let backend = context.backend
         let transcriptionCoordinator = context.transcriptionCoordinator
 
-        progress("Loading transcription model...")
-        try await transcriptionCoordinator.preloadRequired(
-            backend: backend,
-            enablePostProcessor: false,
-            includeMeetingHelpers: true,
-            meetingHelperTrigger: .audioImport,
-            appleSpeechLanguage: config.resolvedAppleSpeechLanguage
-        )
+        if context.hostedTranscription == nil {
+            progress("Loading transcription model...")
+            try await transcriptionCoordinator.preloadRequired(
+                backend: backend,
+                enablePostProcessor: false,
+                includeMeetingHelpers: true,
+                meetingHelperTrigger: .audioImport,
+                appleSpeechLanguage: config.resolvedAppleSpeechLanguage
+            )
+        }
 
         try Task.checkCancellation()
 
         // Run VAD to skip silent files (prevents Cohere hallucinations on silence)
-        if let vadManager = await transcriptionCoordinator.getVadManager() {
+        if context.hostedTranscription == nil, let vadManager = await transcriptionCoordinator.getVadManager() {
             do {
                 let vadResults = try await vadManager.process(wavURL)
                 let hasSpeech = vadResults.contains { $0.probability > 0.5 }
@@ -183,16 +205,26 @@ enum AudioFileImportController {
 
         try Task.checkCancellation()
 
-        progress("Transcribing audio...")
-        let transcription = try await transcriptionCoordinator.transcribeMeeting(
-            at: wavURL,
-            backend: backend,
-            cohereLanguage: config.resolvedCohereLanguage,
-            bodhanLanguage: config.resolvedBodhanLanguage,
-            whisperLanguage: config.resolvedWhisperLanguage,
-            parakeetLanguage: config.resolvedParakeetLanguage,
-            appleSpeechLanguage: config.resolvedAppleSpeechLanguage
-        )
+        progress(context.hostedTranscription == nil ? "Transcribing audio..." : "Transcribing audio online...")
+        let transcription: SpeechTranscriptionResult
+        var transcriptionIncomplete = false
+        do {
+            transcription = try await transcriptionCoordinator.transcribeMeeting(
+                at: wavURL,
+                backend: backend,
+                openRouter: context.hostedTranscription,
+                cohereLanguage: config.resolvedCohereLanguage,
+                bodhanLanguage: config.resolvedBodhanLanguage,
+                whisperLanguage: config.resolvedWhisperLanguage,
+                qwen3AsrLanguage: config.resolvedQwen3AsrLanguage,
+                parakeetLanguage: config.resolvedParakeetLanguage,
+                appleSpeechLanguage: config.resolvedAppleSpeechLanguage
+            )
+        } catch let partial as HostedMeetingAudio.PartialFailure {
+            transcription = partial.result
+            transcriptionIncomplete = true
+            progress("Keeping the completed portion of the transcript...")
+        }
         let rawTranscript = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawTranscript.isEmpty else {
             throw ImportError.readError("No speech was transcribed from the selected audio file.")
@@ -202,7 +234,10 @@ enum AudioFileImportController {
 
         // Run speaker diarization if available
         var diarizedTranscript = rawTranscript
-        if let diarizerManager = await transcriptionCoordinator.getDiarizerManager(),
+        // Hosted timestamps describe whole request chunks, not speaker turns.
+        // Do not assign an entire chunk to a speaker using those coarse bounds.
+        if context.hostedTranscription == nil,
+           let diarizerManager = await transcriptionCoordinator.getDiarizerManager(),
            diarizerManager.isAvailable {
             progress("Identifying speakers...")
             do {
@@ -232,7 +267,7 @@ enum AudioFileImportController {
         let wordCount = DictationStore.countWords(in: diarizedTranscript)
         let generatedTitle: String
         progress("Generating title...")
-        if let autoTitle = await MeetingSummaryClient.generateTitle(transcript: diarizedTranscript, config: config),
+        if let autoTitle = await noteGeneration.title(diarizedTranscript, config),
            !autoTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             generatedTitle = autoTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
@@ -245,14 +280,7 @@ enum AudioFileImportController {
         let templateSnapshot = context.templateSnapshot
         let formattedNotes: String
         do {
-            formattedNotes = try await MeetingSummaryClient.summarize(
-                transcript: diarizedTranscript,
-                meetingTitle: generatedTitle,
-                config: config,
-                template: templateSnapshot,
-                existingNotes: nil,
-                manualNotesToRetain: ""
-            )
+            formattedNotes = try await noteGeneration.summary(diarizedTranscript, generatedTitle, config, templateSnapshot)
         } catch {
             fputs("[import] summary generation failed: \(error)\n", stderr)
             formattedNotes = MeetingSummaryClient.summaryFailureNotes(
@@ -266,7 +294,12 @@ enum AudioFileImportController {
         try Task.checkCancellation()
 
         // Persist the converted WAV as a saved recording so retranscription works
-        let savedRecordingPath = try persistRecording(wavURL: wavURL, title: generatedTitle)
+        let savedRecordingPath = try persistRecording(wavURL: wavURL, title: generatedTitle,
+                                                     supportDirectory: context.supportDirectory)
+        var didPersist = false
+        defer {
+            if !didPersist { try? FileManager.default.removeItem(atPath: savedRecordingPath) }
+        }
 
         progress("Saving...")
         let now = Date()
@@ -284,8 +317,10 @@ enum AudioFileImportController {
             selectedTemplateID: templateSnapshot.id,
             selectedTemplateName: templateSnapshot.name,
             selectedTemplateKind: templateSnapshot.kind,
-            selectedTemplatePrompt: templateSnapshot.prompt
+            selectedTemplatePrompt: templateSnapshot.prompt,
+            transcriptionIncomplete: transcriptionIncomplete
         )
+        didPersist = true
 
         return ImportResult(
             meetingID: meetingID,
@@ -380,8 +415,8 @@ enum AudioFileImportController {
 
     /// Copies the converted WAV to the meeting-recordings directory so the imported
     /// meeting can be retranscribed later.
-    private static func persistRecording(wavURL: URL, title: String) throws -> String {
-        let recordingsDirectory = AppIdentity.supportDirectoryURL
+    private static func persistRecording(wavURL: URL, title: String, supportDirectory: URL) throws -> String {
+        let recordingsDirectory = supportDirectory
             .appendingPathComponent("meeting-recordings", isDirectory: true)
         try FileManager.default.createDirectory(
             at: recordingsDirectory,

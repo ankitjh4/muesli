@@ -1,9 +1,96 @@
 import Foundation
+import MuesliCore
 import Testing
 @testable import MuesliNativeApp
 
 @Suite("OpenRouter dictation")
 struct OpenRouterTranscriptionClientTests {
+    @Test("offline blocks both catalog scopes before transport")
+    func offlineRejectsCatalogRequests() async {
+        let client = OpenRouterModelCatalogClient(networkPolicy: ModelNetworkPolicy(allowed: false)) { _ in
+            Issue.record("Offline catalog must not invoke transport")
+            throw URLError(.badServerResponse)
+        }
+        for scope in [OpenRouterModelCatalogScope.text, .transcription] {
+            do {
+                _ = try await client.load(scope)
+                Issue.record("Expected offline catalog rejection")
+            } catch OpenRouterModelCatalogError.offlineMode { }
+            catch { Issue.record("Unexpected error: \(error)") }
+        }
+    }
+
+    @Test("switching offline cancels model discovery")
+    func modeChangeCancelsCatalogRequest() async {
+        let policy = ModelNetworkPolicy()
+        let probe = OpenRouterCancellationProbe()
+        let client = OpenRouterModelCatalogClient(networkPolicy: policy) { _ in
+            await probe.markStarted()
+            try await Task.sleep(for: .seconds(30))
+            throw URLError(.timedOut)
+        }
+        let task = Task { try await client.load(.text) }
+        await probe.waitUntilStarted()
+        policy.setAllowed(false)
+        do {
+            _ = try await task.value
+            Issue.record("Expected catalog cancellation")
+        } catch OpenRouterModelCatalogError.offlineMode { }
+        catch { Issue.record("Unexpected error: \(error)") }
+    }
+
+    @Test("catalog response cannot publish after offline transition even if transport ignores cancellation")
+    func lateCatalogResponseIsRejected() async {
+        let policy = ModelNetworkPolicy()
+        let client = OpenRouterModelCatalogClient(networkPolicy: policy) { request in
+            policy.setAllowed(false)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data("{\"data\":[]}".utf8), response)
+        }
+        do {
+            _ = try await client.load(.transcription)
+            Issue.record("Late catalog must not be returned")
+        } catch OpenRouterModelCatalogError.offlineMode { }
+        catch { Issue.record("Unexpected error: \(error)") }
+    }
+
+    @Test("offline audio is rejected before file access or transport")
+    func offlineRejectsBeforeFileRead() async {
+        let client = OpenRouterTranscriptionClient(networkPolicy: ModelNetworkPolicy(allowed: false)) { _ in
+            Issue.record("Offline mode must not invoke transport")
+            throw URLError(.badServerResponse)
+        }
+        do {
+            _ = try await client.transcribe(
+                wavURL: URL(fileURLWithPath: "/nonexistent/offline-audio.wav"),
+                configuration: .init(apiKey: "", model: "")
+            )
+            Issue.record("Expected offline rejection")
+        } catch OpenRouterTranscriptionError.offlineMode { }
+        catch { Issue.record("Unexpected error: \(error)") }
+    }
+
+    @Test("switching offline cancels an admitted audio request")
+    func modeChangeCancelsAudioRequest() async throws {
+        let url = try temporaryWAV(Data([1]))
+        defer { try? FileManager.default.removeItem(at: url) }
+        let policy = ModelNetworkPolicy()
+        let probe = OpenRouterCancellationProbe()
+        let client = OpenRouterTranscriptionClient(networkPolicy: policy) { _ in
+            await probe.markStarted()
+            try await Task.sleep(for: .seconds(30))
+            throw URLError(.timedOut)
+        }
+        let task = Task { try await client.transcribe(wavURL: url, configuration: .init(apiKey: "key", model: "provider/model")) }
+        await probe.waitUntilStarted()
+        policy.setAllowed(false)
+        do {
+            _ = try await task.value
+            Issue.record("Expected policy cancellation")
+        } catch OpenRouterTranscriptionError.offlineMode { }
+        catch { Issue.record("Unexpected error: \(error)") }
+    }
+
     @Test("request contains the documented endpoint, credential, headers, model, and raw WAV")
     func requestShape() throws {
         let audio = Data([0x52, 0x49, 0x46, 0x46])

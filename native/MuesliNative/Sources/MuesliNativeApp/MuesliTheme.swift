@@ -1,6 +1,52 @@
 import SwiftUI
 import MuesliCore
 
+/// Six friendly color themes. They deliberately change the accent rather than
+/// forcing a dark background, so first-run setup and the default app remain
+/// readable in light mode. Dark mode stays a separate, explicit preference.
+enum MuesliColorTheme: String, CaseIterable, Identifiable {
+    case clean
+    case molokai
+    case solarized
+    case nord
+    case dracula
+    case forest
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .clean: return "Clean"
+        case .molokai: return "Molokai"
+        case .solarized: return "Solarized"
+        case .nord: return "Nord"
+        case .dracula: return "Dracula"
+        case .forest: return "Forest"
+        }
+    }
+
+    var hex: String {
+        switch self {
+        case .clean: return "2563eb"
+        case .molokai: return "f92672"
+        case .solarized: return "2aa198"
+        case .nord: return "5e81ac"
+        case .dracula: return "8b5cf6"
+        case .forest: return "059669"
+        }
+    }
+
+    static func resolved(for hex: String) -> Self {
+        let normalized = hex
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: "")
+            .lowercased()
+        // `1e1e2e` is the legacy sentinel that means “use the default accent.”
+        if normalized == "1e1e2e" { return .clean }
+        return allCases.first(where: { $0.hex == normalized }) ?? .clean
+    }
+}
+
 enum MuesliTheme {
     // MARK: - Colors — Backgrounds (layered)
 
@@ -14,13 +60,13 @@ enum MuesliTheme {
         light: backgroundDeepLightHex
     )
     static let backgroundBase   = Color.adaptive(dark: 0x161719, light: 0xFFFFFF)
-    static let backgroundRaised = Color.adaptive(dark: 0x1C1D20, light: 0xF0F0F2)
+    static let backgroundRaised = Color.adaptive(dark: 0x1C1D20, light: 0xF1F3F7)
     static let backgroundHover  = Color.adaptive(dark: 0x232528, light: 0xE8E8EC)
 
     // MARK: - Surfaces (interactive elements)
 
-    static let surfacePrimary   = Color.adaptive(dark: 0x262830, light: 0xE5E5EA)
-    static let surfaceSelected  = Color.adaptive(dark: 0x2E3340, light: 0xD6DFFE)
+    static let surfacePrimary   = Color.adaptive(dark: 0x262830, light: 0xF8F9FC)
+    static let surfaceSelected  = Color.adaptive(dark: 0x2E3340, light: 0xEAF0FF)
     static let surfaceBorder    = Color.adaptiveAlpha(
         dark: .white, darkAlpha: 0.07,
         light: .black, lightAlpha: 0.08
@@ -30,15 +76,15 @@ enum MuesliTheme {
 
     static let textPrimary = Color.adaptiveAlpha(
         dark: .white, darkAlpha: 0.92,
-        light: .black, lightAlpha: 0.88
+        light: .black, lightAlpha: 0.92
     )
     static let textSecondary = Color.adaptiveAlpha(
         dark: .white, darkAlpha: 0.62,
-        light: .black, lightAlpha: 0.55
+        light: .black, lightAlpha: 0.68
     )
     static let textTertiary = Color.adaptiveAlpha(
         dark: .white, darkAlpha: 0.40,
-        light: .black, lightAlpha: 0.33
+        light: .black, lightAlpha: 0.60
     )
 
     // MARK: - Accent
@@ -59,8 +105,8 @@ enum MuesliTheme {
     // MARK: - Semantic
 
     static let recording        = Color(hex: 0xEF4444)
-    static let transcribing     = Color(hex: 0xF59E0B)
-    static let success          = Color(hex: 0x34D399)
+    static let transcribing     = Color.adaptive(dark: 0xF59E0B, light: 0xA65308)
+    static let success          = Color.adaptive(dark: 0x34D399, light: 0x15803D)
 
     // MARK: - Typography (SF Pro via .system())
 
@@ -98,6 +144,20 @@ enum MuesliTheme {
 // MARK: - Color Helpers
 
 extension Color {
+    init(hex: String) {
+        var normalized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.hasPrefix("#") { normalized.removeFirst() }
+        guard normalized.count == 6, let value = UInt64(normalized, radix: 16) else {
+            self = .black
+            return
+        }
+        self.init(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
+
     init(hex: Int) {
         self.init(
             red: Double((hex >> 16) & 0xFF) / 255.0,

@@ -1,9 +1,9 @@
 ---
 name: muesli-agent
-description: Use when working with local Muesli meetings, notes, dictations, audio-file transcription, or raw transcripts through the bundled `muesli-cli` CLI. Prefer this skill when a coding agent needs to transcribe local audio, inspect transcripts, summarize meetings with its own model, or write notes back into Muesli without requiring the user's API keys.
+description: Use when working with local Muesli+ meetings, notes, dictations, audio-file transcription, or raw transcripts through the bundled `muesli-cli` CLI. Prefer this skill when a coding agent needs to transcribe local audio, inspect transcripts, summarize meetings with its own model, or write notes back into Muesli+ without requiring the user's API keys.
 ---
 
-# Muesli Agent
+# Muesli+ Agent
 
 Use the local `muesli-cli` CLI as the source of truth for meeting and dictation data.
 
@@ -11,8 +11,8 @@ Use the local `muesli-cli` CLI as the source of truth for meeting and dictation 
 
 Resolve the binary in this order:
 1. `command -v muesli-cli`
-2. `command -v muesli` only when the resolved path is a Homebrew cask alias to `Muesli.app/Contents/MacOS/muesli-cli`; verify with `muesli info`
-3. `/Applications/Muesli.app/Contents/MacOS/muesli-cli`
+2. `command -v muesli` only when the resolved path is a Homebrew cask alias to `Muesli+.app/Contents/MacOS/muesli-cli`; verify with `muesli info`
+3. `/Applications/Muesli+.app/Contents/MacOS/muesli-cli`
 4. A local SwiftPM build path inside this repo
 
 If discovery is uncertain, run the candidate binary with `info` first and reject unrelated `muesli` executables.
@@ -36,7 +36,7 @@ If discovery is uncertain, run the candidate binary with `info` first and reject
 - Treat stderr as informational only.
 - Do not mutate `rawTranscript`; only update `formattedNotes`.
 - Prefer the meeting transcript when `notesState` is `missing` or `raw_transcript_fallback`.
-- Use `--db-path` or `--support-dir` only when the default Muesli data location is wrong.
+- Use `--db-path` or `--support-dir` only when the default Muesli+ data location is wrong.
 
 ## When to read references
 

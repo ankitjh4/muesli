@@ -133,7 +133,7 @@ enum BodhanModel: String, CaseIterable, Sendable {
         }
         func fetchManifest<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {
             let url = URL(string: "https://huggingface.co/\(repository)/resolve/\(revision)/\(path)")!
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await ModelNetworkPolicy.shared.data(for: URLRequest(url: url), session: .shared)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 throw NSError(domain: "BodhanASR", code: 101, userInfo: [NSLocalizedDescriptionKey: "Could not load the model download manifest."])
             }

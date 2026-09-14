@@ -2,15 +2,20 @@
 
 ## Cloud Agents (Linux)
 
-Muesli is a native macOS app. Cloud Agents run on Linux and cannot build the Swift app, run `swift test`, or exercise `muesli-cli` without a macOS host.
+Muesli+ is a native macOS app. Cloud Agents run on Linux and cannot build the Swift app, run `swift test`, or exercise `muesli-cli` without a macOS host.
 
 Use the Linux CI checks that mirror `.github/workflows/ci.yml` on `ubuntu-latest`:
 
 ```bash
 ./scripts/test_classify_changed_files.sh
 ./scripts/test_ci_test_shards.sh
-./scripts/verify_update_flow.sh --skip-dmg
+./scripts/verify_update_flow.sh --skip-dmg --app-name Muesli
 ```
+
+The checked-in `docs/appcast.xml` is the historical upstream feed, whose signed
+artifact names remain `Muesli`. Fork builds leave `SUFeedURL` empty by default;
+validating that historical feed does not validate a Muesli+ release or enable
+updates. Do not rewrite existing signed release URLs to match the fork name.
 
 Native builds and the full test suite use Xcode 26.6 (Swift 6.3) on macOS 26, matching CI. MLX Swift requires Swift 6.3; the app deployment target remains macOS 14.2:
 
@@ -82,7 +87,7 @@ swift test --package-path native/MuesliNative --scratch-path "$HOME/Library/Cach
 
 ## LocalVQE Runtime
 
-Every signed Muesli package, including `MuesliDev`, fixed dev lanes, preproduction, and stable builds, must include a complete LocalVQE runtime. The committed `.gguf` model is not sufficient by itself; packaging also requires `liblocalvqe`, the `libggml` umbrella library, `libggml-base`, and every referenced ggml backend library.
+Every signed Muesli+ package, including `MuesliDev`, fixed dev lanes, preproduction, and stable builds, must include a complete LocalVQE runtime. The committed `.gguf` model is not sufficient by itself; packaging also requires `liblocalvqe`, the `libggml` umbrella library, `libggml-base`, and every referenced ggml backend library.
 
 The generated runtime under `native/MuesliNative/LocalVQE/lib/` is gitignored and is not part of the SwiftPM or Xcode cache. A fresh worktree can therefore have a warm build cache while still lacking LocalVQE. Before a signed build:
 

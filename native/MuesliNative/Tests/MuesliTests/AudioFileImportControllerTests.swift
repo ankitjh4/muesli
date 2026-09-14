@@ -3,10 +3,78 @@ import Foundation
 import AVFoundation
 import FluidAudio
 import MuesliCore
+import SQLite3
 @testable import MuesliNativeApp
 
 @Suite("AudioFileImportController")
 struct AudioFileImportControllerTests {
+    @Test("hosted import handles success, partial transcription, and failed persistence", arguments: ["complete", "partial", "saveFailure"])
+    @MainActor
+    func hostedImportPipeline(scenario: String) async throws {
+        let partial = scenario == "partial"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-import-pipeline-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try WavWriter.writeTemporaryWAV(samples: Array(repeating: Float(0.1), count: 61 * 16_000),
+                                                   directoryName: "muesli-import-pipeline-source")
+        defer { try? FileManager.default.removeItem(at: source) }
+        let store = DictationStore(databaseURL: directory.appendingPathComponent("test.db"))
+        try store.migrateIfNeeded()
+        let configStore = ConfigStore(supportDirectory: directory)
+        let controller = MuesliController(
+            runtime: RuntimePaths(repoRoot: directory, menuIcon: nil, appIcon: nil, bundlePath: nil),
+            dictationStore: store, configStore: configStore)
+        if scenario == "saveFailure" {
+            var database: OpaquePointer?
+            #expect(sqlite3_open(directory.appendingPathComponent("test.db").path, &database) == SQLITE_OK)
+            defer { sqlite3_close(database) }
+            #expect(sqlite3_exec(database, "DROP TABLE meetings", nil, nil, nil) == SQLITE_OK)
+        }
+        actor Requests {
+            var count = 0
+            func next() -> Int { count += 1; return count }
+        }
+        let requests = Requests()
+        let policy = ModelNetworkPolicy()
+        let client = OpenRouterTranscriptionClient(networkPolicy: policy) { request in
+            let number = await requests.next()
+            if partial && number == 2 { throw URLError(.timedOut) }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data("{\"text\":\"Portion \(number).\"}".utf8), response)
+        }
+        let context = AudioFileImportController.ImportContext(config: AppConfig(), backend: .whisper,
+            transcriptionCoordinator: TranscriptionCoordinator(openRouterMeetingClient: client),
+            templateSnapshot: MeetingTemplates.auto.snapshot,
+            hostedTranscription: .init(apiKey: "test", model: "test/transcribe"),
+            supportDirectory: directory, networkPolicy: policy)
+        let notes = AudioFileImportController.NoteGeneration(
+            title: { _, _ in "Imported test" }, summary: { text, _, _, _ in "Notes: \(text)" })
+        let result: AudioFileImportController.ImportResult
+        do {
+            result = try await AudioFileImportController.importAudioFile(sourceURL: source,
+                title: "Source", controller: controller, context: context, noteGeneration: notes, progress: { _ in })
+        } catch {
+            guard scenario == "saveFailure" else { throw error }
+            let recordings = directory.appendingPathComponent("meeting-recordings")
+            let remaining = try FileManager.default.contentsOfDirectory(atPath: recordings.path)
+            #expect(remaining.isEmpty)
+            #expect(FileManager.default.fileExists(atPath: source.path))
+            #expect(await requests.count == 2)
+            return
+        }
+        #expect(scenario != "saveFailure", "Expected the database insertion to fail")
+        let record = try #require(try store.meeting(id: result.meetingID))
+        #expect(record.status == (partial ? .incomplete : .completed))
+        #expect(record.rawTranscript == (partial ? "Portion 1." : "Portion 1. Portion 2."))
+        #expect(record.formattedNotes == "Notes: \(record.rawTranscript)")
+        #expect(record.source == .audioImport)
+        #expect(await requests.count == 2)
+        let savedPath = try #require(record.savedRecordingPath)
+        #expect(savedPath.hasPrefix(directory.path + "/meeting-recordings/"))
+        #expect(FileManager.default.fileExists(atPath: savedPath))
+        #expect(FileManager.default.fileExists(atPath: source.path))
+    }
 
     // MARK: - WAV Conversion Tests
 

@@ -90,17 +90,7 @@ struct DictationsView: View {
 
             if appState.dictationRows.isEmpty {
                 Spacer()
-                VStack(spacing: MuesliTheme.spacing12) {
-                    Image(systemName: "mic.badge.plus")
-                        .font(.system(size: 40, weight: .thin))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                    Text(emptyStateTitle)
-                        .font(MuesliTheme.title3())
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                    Text(emptyStateInstruction)
-                        .font(MuesliTheme.callout())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                }
+                dictationsEmptyState
                 Spacer()
             } else {
                 ScrollView {
@@ -169,10 +159,63 @@ struct DictationsView: View {
         }
     }
 
-    private var emptyStateInstruction: String {
-        if appState.dictationOriginFilter != .all
+    private var hasActiveEmptyStateFilter: Bool {
+        appState.dictationOriginFilter != .all
             || selectedFilter != .all
-            || appState.dictationApplicationFilter != nil {
+            || appState.dictationApplicationFilter != nil
+    }
+
+    private var dictationsEmptyState: some View {
+        VStack(spacing: MuesliTheme.spacing12) {
+            Image(systemName: hasActiveEmptyStateFilter ? "line.3.horizontal.decrease.circle" : "mic.badge.plus")
+                .font(.system(size: 40, weight: .thin))
+                .foregroundStyle(MuesliTheme.textTertiary)
+            Text(emptyStateTitle)
+                .font(MuesliTheme.title3())
+                .foregroundStyle(MuesliTheme.textSecondary)
+            Text(emptyStateInstruction)
+                .font(MuesliTheme.callout())
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .multilineTextAlignment(.center)
+
+            if !hasActiveEmptyStateFilter,
+               appState.config.enablePushToTalk {
+                Text(appState.config.dictationHotkey.label)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .padding(.vertical, 6)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                    )
+
+                HStack(spacing: MuesliTheme.spacing8) {
+                    Button("Change shortcut") {
+                        appState.selectedTab = .shortcuts
+                    }
+                    Button("Choose model") {
+                        appState.selectedTab = .models
+                    }
+                }
+                .buttonStyle(.link)
+                .font(MuesliTheme.caption())
+            }
+        }
+        .padding(MuesliTheme.spacing24)
+        .frame(maxWidth: 430)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerXL))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerXL)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+    private var emptyStateInstruction: String {
+        if hasActiveEmptyStateFilter {
             return "Try another source, app, or time range"
         }
         let useCase = appState.config.resolvedOnboardingUseCase

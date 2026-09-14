@@ -328,7 +328,7 @@ enum DiagnosticErrorCatalog {
             "5": .init(summary: "Unknown transcription backend was requested", area: "transcription_runtime"),
             "6": .init(summary: "Bodhan requires a newer macOS version", area: "transcription_runtime"),
         ],
-        "Muesli": [
+        "Muesli+": [
             "1": .init(summary: "Selected transcription backend requires a newer macOS version", area: "transcription_runtime"),
         ],
         "MicrophoneRecorder": [

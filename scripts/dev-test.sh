@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Builds and launches an isolated dev app for end-to-end testing.
 #
-# - Separate bundle ID (com.muesli.dev*) — won't interfere with production Muesli
-# - Separate data directory (~/Library/Application Support/MuesliDev*/)
+# - Separate bundle ID (com.muesliplus.dev*) — won't interfere with production Muesli+
+# - Separate data directory (~/Library/Application Support/Muesli+ Dev*/)
 # - Preserves existing dev config and database by default
 # - Dev builds default to local-only entitlements to preserve existing TCC
 #   permissions and avoid requiring Apple Developer profiles
@@ -13,11 +13,11 @@ set -euo pipefail
 #   maintainer signing certificate
 # - Uses a shared, worktree-isolated SwiftPM scratch path by default; set
 #   MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1 to use package-local .build instead
-# - Installs to /Applications/MuesliDev*.app
+# - Installs to /Applications/Muesli+ Dev*.app
 #
 # Usage:
-#   ./scripts/dev-test.sh                         # Build and launch MuesliDev
-#   ./scripts/dev-test.sh --lane A                # Build and launch MuesliDevA
+#   ./scripts/dev-test.sh                         # Build and launch Muesli+ Dev
+#   ./scripts/dev-test.sh --lane A                # Build and launch Muesli+ Dev A
 #   ./scripts/dev-test.sh --lane A --local-only   # Omit iCloud/APNs entitlements
 #   ./scripts/dev-test.sh --reset                 # Reset onboarding only (keeps data)
 #   MUESLI_PROVISIONING_PROFILE=/path/to/profile.provisionprofile \
@@ -29,10 +29,10 @@ source "$ROOT/scripts/muesli_telemetry_channels.sh"
 
 usage() {
   cat <<'EOF'
-Build and launch a local Muesli dev app.
+Build and launch a local Muesli+ dev app.
 
 Options:
-  --lane A|B|C            Build a fixed reusable dev lane: MuesliDevA/B/C.
+  --lane A|B|C            Build a fixed reusable dev lane: Muesli+ Dev A/B/C.
   --local-only            Sign without iCloud/APNs entitlements.
                           Alias: --without-cloud-entitlements.
   --cloud-entitlements    Sign with the default cloud entitlements file.
@@ -40,17 +40,17 @@ Options:
   --reset                 Reset onboarding only for the selected lane.
   --help                  Show this help text.
 
-Default behavior without --lane is unchanged for the app identity: MuesliDev,
-com.muesli.dev, ~/Library/Application Support/MuesliDev, and
-/Applications/MuesliDev.app. Dev builds use local-only entitlements unless
+Default behavior without --lane uses the app identity Muesli+ Dev,
+com.muesliplus.dev, ~/Library/Application Support/Muesli+ Dev, and
+/Applications/Muesli+ Dev.app. Dev builds use local-only entitlements unless
 --cloud-entitlements is provided.
 
 Cloud-entitled dev builds require a provisioning profile whose app identifier
 matches the selected bundle ID and a signing identity included by that profile.
-Cloud-entitled MuesliDev builds always use the CloudKit Development environment;
+Cloud-entitled Muesli+ Dev builds always use the CloudKit Development environment;
 only production/preproduction release builds may use CloudKit Production.
-For the maintainer's plain MuesliDev lane, this script auto-selects the local
-com.muesli.dev CloudKit profile from ../muesli-ios/secrets when
+For the plain Muesli+ Dev lane, this script auto-selects the local
+com.muesliplus.dev CloudKit profile from ../muesli-ios/secrets when
 --cloud-entitlements is provided and the profile exists.
 EOF
 }
@@ -63,7 +63,7 @@ ENTITLEMENTS_MODE_EXPLICIT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean)
-      echo "Error: --clean has been removed because it deletes MuesliDev data." >&2
+      echo "Error: --clean has been removed because it deletes Muesli+ Dev data." >&2
       echo "To test a fresh profile, create a named backup first and use a separate support directory." >&2
       exit 2
       ;;
@@ -104,14 +104,16 @@ done
 
 case "$LANE" in
   "")
-    DEV_APP_NAME="MuesliDev"
-    DEV_BUNDLE_ID="com.muesli.dev"
+    DEV_APP_NAME="Muesli+ Dev"
+    DEV_EXECUTABLE_NAME="MuesliPlusDev"
+    DEV_BUNDLE_ID="com.muesliplus.dev"
     ;;
   A|a|B|b|C|c)
     LANE_UPPER="$(printf '%s' "$LANE" | tr '[:lower:]' '[:upper:]')"
     LANE_LOWER="$(printf '%s' "$LANE" | tr '[:upper:]' '[:lower:]')"
-    DEV_APP_NAME="MuesliDev${LANE_UPPER}"
-    DEV_BUNDLE_ID="com.muesli.dev.${LANE_LOWER}"
+    DEV_APP_NAME="Muesli+ Dev ${LANE_UPPER}"
+    DEV_EXECUTABLE_NAME="MuesliPlusDev${LANE_UPPER}"
+    DEV_BUNDLE_ID="com.muesliplus.dev.${LANE_LOWER}"
     ;;
   *)
     echo "Error: unsupported lane '$LANE'. Allowed lanes: A, B, C." >&2
@@ -126,7 +128,7 @@ fi
 DEV_SUPPORT_DIR="$HOME/Library/Application Support/$DEV_APP_NAME"
 DEV_APP="/Applications/$DEV_APP_NAME.app"
 ONBOARDING_PROGRESS_FILE="$DEV_SUPPORT_DIR/onboarding-progress.json"
-DEFAULT_DEV_CLOUD_PROFILE="$ROOT/../muesli-ios/secrets/mueslimacosdevcloudkitcommueslidev.provisionprofile"
+DEFAULT_DEV_CLOUD_PROFILE="$ROOT/../muesli-ios/secrets/muesliplusmacosdevcloudkitcommuesliplusdev.provisionprofile"
 DEFAULT_DEV_CLOUD_SIGN_IDENTITY="Apple Development: Pranav Hari Guruvayurappan (59WTZW55XG)"
 RESOLVED_PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
 RESOLVED_SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-}"
@@ -143,15 +145,12 @@ BUILD_ENV=(
   MUESLI_BUNDLE_ID="$DEV_BUNDLE_ID"
   MUESLI_SUPPORT_DIR_NAME="$DEV_APP_NAME"
   MUESLI_DISPLAY_NAME="$DEV_APP_NAME"
+  MUESLI_EXECUTABLE_NAME="$DEV_EXECUTABLE_NAME"
   MUESLI_SPARKLE_FEED_URL=""
-  MUESLI_TELEMETRYDECK_APP_ID="$MUESLI_TELEMETRYDECK_DEV_APP_ID"
-  MUESLI_TELEMETRY_CHANNEL="dev"
+  MUESLI_TELEMETRYDECK_APP_ID=""
+  MUESLI_TELEMETRY_CHANNEL="unconfigured"
   MUESLI_USE_XCODE_BUILD="$RESOLVED_USE_XCODE_BUILD"
 )
-if [[ -n "$LANE" ]]; then
-  BUILD_ENV+=(MUESLI_EXECUTABLE_NAME="$DEV_APP_NAME")
-fi
-
 use_local_only_entitlements() {
   RESOLVED_PROVISIONING_PROFILE=""
   RESOLVED_SIGN_IDENTITY=""
@@ -170,12 +169,12 @@ case "$ENTITLEMENTS_MODE" in
   cloud)
     REQUESTED_CLOUDKIT_ENVIRONMENT="${MUESLI_ICLOUD_CONTAINER_ENVIRONMENT:-Development}"
     if [[ "$(printf '%s' "$REQUESTED_CLOUDKIT_ENVIRONMENT" | tr '[:upper:]' '[:lower:]')" != "development" ]]; then
-      echo "Error: MuesliDev builds must use the CloudKit Development environment." >&2
-      echo "Use the production Muesli release workflow for CloudKit Production." >&2
+      echo "Error: Muesli+ Dev builds must use the CloudKit Development environment." >&2
+      echo "Use the production Muesli+ release workflow for CloudKit Production." >&2
       exit 2
     fi
     BUILD_ENV+=(MUESLI_ICLOUD_CONTAINER_ENVIRONMENT="Development")
-    if [[ -z "$RESOLVED_PROVISIONING_PROFILE" && "$DEV_BUNDLE_ID" == "com.muesli.dev" && -f "$DEFAULT_DEV_CLOUD_PROFILE" ]]; then
+    if [[ -z "$RESOLVED_PROVISIONING_PROFILE" && "$DEV_BUNDLE_ID" == "com.muesliplus.dev" && -f "$DEFAULT_DEV_CLOUD_PROFILE" ]]; then
       RESOLVED_PROVISIONING_PROFILE="$DEFAULT_DEV_CLOUD_PROFILE"
       if [[ -z "$RESOLVED_SIGN_IDENTITY" ]]; then
         RESOLVED_SIGN_IDENTITY="$DEFAULT_DEV_CLOUD_SIGN_IDENTITY"
@@ -216,7 +215,7 @@ case "$ENTITLEMENTS_MODE" in
 esac
 
 # Kill any running dev instance
-pkill -f "$DEV_APP" 2>/dev/null || true
+pkill -x "$DEV_EXECUTABLE_NAME" 2>/dev/null || true
 sleep 0.5
 
 # Reset onboarding only if requested
@@ -267,4 +266,4 @@ if [[ -n "$LANE" ]]; then
 else
   echo "  ./scripts/dev-test.sh --reset                 # Re-run onboarding (keep data)"
 fi
-echo "  pkill -f \"$DEV_APP\"                         # Kill this dev app"
+echo "  pkill -x \"$DEV_EXECUTABLE_NAME\"                  # Kill this dev app"

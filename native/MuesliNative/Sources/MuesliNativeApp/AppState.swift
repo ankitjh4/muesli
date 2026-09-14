@@ -3,11 +3,13 @@ import Observation
 import MuesliCore
 
 enum DashboardTab: String, CaseIterable {
+    case home
     case timeline
     case dictations
     case insights
     case meetings
     case dictionary
+    case lipDictation
     case models
     case shortcuts
     case settings
@@ -274,7 +276,7 @@ final class AppState {
     var isSearchActive: Bool { !searchQuery.isEmpty }
 
     // Navigation
-    var selectedTab: DashboardTab = .timeline
+    var selectedTab: DashboardTab = .home
     var insightsReturnTab: DashboardTab = .timeline
     var insightsBackLabel: String {
         insightsReturnTab == .dictations ? "Back to Dictations" : "Back to Timeline"

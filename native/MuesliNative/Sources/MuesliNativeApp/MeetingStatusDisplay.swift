@@ -10,6 +10,8 @@ extension MeetingStatus {
             return "Processing"
         case .completed:
             return "Completed"
+        case .incomplete:
+            return "Transcript incomplete"
         case .noteOnly:
             return "Note only"
         case .failed:
@@ -27,7 +29,7 @@ extension MeetingStatus {
             return MuesliTheme.success
         case .noteOnly:
             return MuesliTheme.textTertiary
-        case .failed:
+        case .failed, .incomplete:
             return MuesliTheme.transcribing
         }
     }

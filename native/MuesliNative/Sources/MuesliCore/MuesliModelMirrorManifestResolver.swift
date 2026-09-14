@@ -1,6 +1,6 @@
 import Foundation
 
-/// A pinned, public Muesli model manifest hosted at the trusted asset origin.
+/// A pinned, public Muesli+ model manifest hosted at the trusted asset origin.
 ///
 /// The manifest is immutable for a released app build. It supplies the exact
 /// files, sizes, and checksums used by the existing resumable downloader.
@@ -12,7 +12,7 @@ public struct MuesliModelMirror: Hashable, Sendable {
     }
 }
 
-/// Errors raised while validating a Muesli-hosted model manifest.
+/// Errors raised while validating a Muesli+-hosted model manifest.
 public enum MuesliModelMirrorManifestError: Error, LocalizedError, Sendable {
     case untrustedManifestURL(URL)
     case invalidHTTPStatus(Int, URL)
@@ -45,7 +45,7 @@ public enum MuesliModelMirrorManifestError: Error, LocalizedError, Sendable {
     }
 }
 
-/// Resolves Muesli's immutable R2-backed model manifests into downloader manifests.
+/// Resolves Muesli+'s immutable R2-backed model manifests into downloader manifests.
 ///
 /// This deliberately accepts only the production asset origin and objects below
 /// the manifest's own `files/` directory. A malformed remote manifest therefore
@@ -55,8 +55,10 @@ public final class MuesliModelMirrorManifestResolver: @unchecked Sendable {
 
     private static let assetHost = "assets.muesli.works"
     private let session: URLSession
+    private let networkPolicy: ModelNetworkPolicy
 
-    public init(configuration: URLSessionConfiguration = .default) {
+    public init(configuration: URLSessionConfiguration = .default, networkPolicy: ModelNetworkPolicy = .shared) {
+        self.networkPolicy = networkPolicy
         let configuration = configuration.copy() as? URLSessionConfiguration ?? configuration
         configuration.timeoutIntervalForRequest = 8
         configuration.timeoutIntervalForResource = 15
@@ -72,7 +74,7 @@ public final class MuesliModelMirrorManifestResolver: @unchecked Sendable {
             throw MuesliModelMirrorManifestError.untrustedManifestURL(mirror.manifestURL)
         }
 
-        let (data, response) = try await session.data(from: mirror.manifestURL)
+        let (data, response) = try await networkPolicy.data(for: URLRequest(url: mirror.manifestURL), session: session)
         // See the Hugging Face resolver: a completed URLSession request does
         // not by itself mean the enclosing model operation is still wanted.
         try Task.checkCancellation()

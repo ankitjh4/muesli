@@ -145,11 +145,13 @@ struct SidebarView: View {
                 .padding(.top, MuesliTheme.spacing16)
                 .padding(.bottom, MuesliTheme.spacing12)
 
+            collapsedItem(tab: .home, icon: "house", label: "Home")
             collapsedItem(tab: .timeline, icon: "clock", label: "Timeline")
             collapsedItem(tab: .dictations, icon: "waveform", label: "Dictations")
             collapsedItem(tab: .meetings, icon: "person.2", label: "Meetings")
             collapsedItem(tab: .insights, icon: "chart.bar.xaxis", label: "Insights")
             collapsedItem(tab: .dictionary, icon: "character.book.closed", label: "Dictionary")
+            collapsedItem(tab: .lipDictation, icon: "video", label: "Lip dictation · Experimental")
 
             Spacer()
 
@@ -206,20 +208,28 @@ struct SidebarView: View {
             sidebarHeader
             searchBar
 
-            sidebarItem(tab: .timeline, icon: "clock", label: "Timeline")
-            sidebarItem(tab: .dictations, icon: "waveform", label: "Dictations")
-            meetingsSection
-            sidebarItem(tab: .insights, icon: "chart.bar.xaxis", label: "Insights")
-            sidebarItem(tab: .dictionary, icon: "character.book.closed", label: "Dictionary")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    sidebarGroupLabel("WORKSPACE")
+                    sidebarItem(tab: .home, icon: "house", label: "Home")
+                    sidebarItem(tab: .timeline, icon: "clock", label: "Timeline")
+                    sidebarItem(tab: .dictations, icon: "waveform", label: "Dictations")
+                    meetingsSection
+                    sidebarItem(tab: .insights, icon: "chart.bar.xaxis", label: "Insights")
 
-            Spacer()
+                    sidebarGroupLabel("MAKE IT YOURS")
+                    sidebarItem(tab: .dictionary, icon: "character.book.closed", label: "Dictionary")
+                    sidebarItem(tab: .models, icon: "cpu", label: "Models")
+                    sidebarItem(tab: .shortcuts, icon: "command", label: "Shortcuts")
+                    sidebarItem(tab: .settings, icon: "gearshape", label: "Settings")
 
+                    sidebarGroupLabel("EXPLORE")
+                    sidebarItem(tab: .lipDictation, icon: "video", label: "Lip dictation · Lab")
+                    sidebarItem(tab: .about, icon: "info.circle", label: "About", updateCTA: pendingUpdateCTA)
+                }
+                .padding(.bottom, 12)
+            }
             modelPreparationStatus
-            spreadTheWordSection
-            sidebarItem(tab: .models, icon: "cpu", label: "Models")
-            sidebarItem(tab: .shortcuts, icon: "command", label: "Shortcuts")
-            sidebarItem(tab: .settings, icon: "gearshape", label: "Settings")
-            sidebarItem(tab: .about, icon: "info.circle", label: "About", updateCTA: pendingUpdateCTA)
             darkModeToggle
                 .padding(.top, MuesliTheme.spacing12)
                 .padding(.bottom, MuesliTheme.spacing16)
@@ -262,24 +272,38 @@ struct SidebarView: View {
         }
     }
 
+    private func sidebarGroupLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(1.2)
+            .foregroundStyle(MuesliTheme.textTertiary)
+            .padding(.horizontal, 19)
+            .padding(.top, 18)
+            .padding(.bottom, 6)
+    }
+
     @ViewBuilder
     private var sidebarHeader: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                 HStack(spacing: MuesliTheme.spacing12) {
                     Group {
-                        if appState.config.menuBarIcon == "muesli",
-                           let img = MenuBarIconRenderer.make(choice: "muesli") {
+                        if let img = MenuBarIconRenderer.make(choice: appState.config.menuBarIcon) {
                             Image(nsImage: img)
+                                .renderingMode(
+                                    MenuBarIconRenderer.isEmojiChoice(appState.config.menuBarIcon)
+                                        ? .original
+                                        : .template
+                                )
                                 .resizable()
                                 .scaledToFit()
                         } else {
-                            Image(systemName: appState.config.menuBarIcon)
+                            Image(systemName: "waveform")
                         }
                     }
                     .frame(width: 22, height: 22)
                     .foregroundStyle(MuesliTheme.accent)
-                    Text("muesli")
+                    Text("muesli+")
                         .font(MuesliTheme.title2())
                         .foregroundStyle(MuesliTheme.textPrimary)
                 }
@@ -539,7 +563,7 @@ struct SidebarView: View {
                 socialShareRow(
                     imageName: "x-logo",
                     fallbackIcon: "bubble.left.and.bubble.right.fill",
-                    label: "Tweet about Muesli",
+                    label: "Tweet about Muesli+",
                     action: { controller.openContributionSidebarShare(.tweetAboutMuesli) }
                 )
                 socialShareRow(

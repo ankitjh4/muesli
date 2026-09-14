@@ -728,8 +728,11 @@ final class FloatingIndicatorController: NSObject {
         let fallback = NSImage(systemSymbolName: "waveform.badge.microphone", accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)) ?? NSImage()
         let newImage = MenuBarIconRenderer.make(choice: config.menuBarIcon) ?? fallback
-        newImage.isTemplate = true
+        newImage.isTemplate = !MenuBarIconRenderer.isEmojiChoice(config.menuBarIcon)
         micIconView?.image = newImage
+        micIconView?.contentTintColor = MenuBarIconRenderer.isEmojiChoice(config.menuBarIcon)
+            ? nil
+            : .white
     }
 
     /// Flash a brief warning message on the indicator pill, then snap back to idle.
@@ -1719,9 +1722,11 @@ final class FloatingIndicatorController: NSObject {
         let fallbackImage = NSImage(systemSymbolName: "waveform.badge.microphone", accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)) ?? NSImage()
         let idleImage = MenuBarIconRenderer.make(choice: config.menuBarIcon) ?? fallbackImage
-        idleImage.isTemplate = true
+        idleImage.isTemplate = !MenuBarIconRenderer.isEmojiChoice(config.menuBarIcon)
         let micView = NSImageView(image: idleImage)
-        micView.contentTintColor = .white
+        micView.contentTintColor = MenuBarIconRenderer.isEmojiChoice(config.menuBarIcon)
+            ? nil
+            : .white
         micView.imageScaling = .scaleProportionallyDown
         micView.isHidden = true
         contentView.addSubview(micView)

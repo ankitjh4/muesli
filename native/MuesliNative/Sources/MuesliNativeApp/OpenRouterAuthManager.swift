@@ -196,7 +196,7 @@ final class OpenRouterAuthManager {
         }
     }
 
-    /// Removes only Muesli's local credential. The user-controlled key remains
+    /// Removes only Muesli+'s local credential. The user-controlled key remains
     /// active at OpenRouter until the user deletes it from OpenRouter's key page.
     func signOut() throws {
         do {
@@ -405,7 +405,7 @@ final class OpenRouterAuthManager {
                             case .authorizationCode(let code):
                                 Self.sendHTTPResponse(
                                     status: 200,
-                                    title: "OpenRouter connected to Muesli",
+                                    title: "OpenRouter connected to Muesli+",
                                     on: connection
                                 )
                                 timeout.cancel()

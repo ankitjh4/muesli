@@ -95,6 +95,29 @@ private actor OpenRouterCatalogRaceProbe {
 @Suite("Meetings navigation")
 struct MeetingsNavigationTests {
 
+    @Test("online meeting setup does not require a downloaded speech model")
+    func onlineMeetingSetupWithoutLocalSpeechModel() throws {
+        let directory = makeSupportDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configStore = ConfigStore(supportDirectory: directory)
+        var config = AppConfig()
+        config.useOpenRouterForMeetings = true
+        config.openRouterMeetingModel = "test/transcribe"
+        config.offlineInference = false
+        configStore.save(config)
+        let auth = OpenRouterAuthManager(
+            credentialStore: OpenRouterCredentialStore(supportDirectory: directory),
+            loadData: { _ in throw URLError(.unsupportedURL) },
+            openURL: { _ in false }, environment: { [:] })
+        try auth.storeManualAPIKey("test-key")
+        let controller = MuesliController(
+            runtime: RuntimePaths(repoRoot: directory, menuIcon: nil, appIcon: nil, bundlePath: nil),
+            configStore: configStore, openRouterAuth: auth)
+        let backend = try controller.resolveMeetingCaptureBackend(
+            downloadedOptions: [], networkPolicy: ModelNetworkPolicy())
+        #expect(backend == controller.selectedMeetingTranscriptionBackend)
+    }
+
     private func makeController(
         dictationStore: DictationStore? = nil,
         configStore: ConfigStore? = nil
@@ -148,7 +171,7 @@ struct MeetingsNavigationTests {
     func meetingsDefaultToBrowser() {
         let appState = AppState()
 
-        #expect(appState.selectedTab == .timeline)
+        #expect(appState.selectedTab == .home)
         #expect(appState.meetingsNavigationState == .browser)
         #expect(appState.selectedMeeting == nil)
     }
@@ -739,13 +762,18 @@ struct MeetingsNavigationTests {
         ) == .completed)
     }
 
-    @Test("retranscribe processing failures mark meeting failed")
-    func retranscribeProcessingFailuresMarkMeetingFailed() {
+    @Test("retranscribe processing failures preserve the existing result status")
+    func retranscribeProcessingFailuresPreserveExistingStatus() {
         #expect(MuesliController.retranscriptionFailureStatus(
             originalStatus: .completed,
             didSetProcessing: true,
             error: CocoaError(.fileReadUnknown)
-        ) == .failed)
+        ) == .completed)
+        #expect(MuesliController.retranscriptionFailureStatus(
+            originalStatus: .incomplete,
+            didSetProcessing: true,
+            error: URLError(.timedOut)
+        ) == .incomplete)
     }
 
     @Test("cached manual notes are persisted before debounce")

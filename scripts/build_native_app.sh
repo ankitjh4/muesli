@@ -10,19 +10,19 @@ INSTALL_DIR="${MUESLI_INSTALL_DIR:-/Applications}"
 BUILD_CONFIG="${1:-release}"
 APP_BINARY="MuesliNativeApp"
 CLI_BINARY="muesli-cli"
-APP_NAME="${MUESLI_APP_NAME:-Muesli}"
+APP_NAME="${MUESLI_APP_NAME:-Muesli+}"
 APP_DISPLAY_NAME="${MUESLI_DISPLAY_NAME:-$APP_NAME}"
 APP_BUNDLE_NAME="${MUESLI_APP_BUNDLE_NAME:-$APP_NAME.app}"
-APP_EXECUTABLE_NAME="${MUESLI_EXECUTABLE_NAME:-Muesli}"
+APP_EXECUTABLE_NAME="${MUESLI_EXECUTABLE_NAME:-Muesli+}"
 APP_SUPPORT_DIR_NAME="${MUESLI_SUPPORT_DIR_NAME:-$APP_DISPLAY_NAME}"
-BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.muesli.app}"
+BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.muesliplus.app}"
 TELEMETRYDECK_APP_ID="${MUESLI_TELEMETRYDECK_APP_ID:-}"
 TELEMETRY_CHANNEL="${MUESLI_TELEMETRY_CHANNEL:-unconfigured}"
 DEFAULT_APP_VERSION="0.8.4"
 APP_VERSION="${MUESLI_BUILD_VERSION:-$DEFAULT_APP_VERSION}"
 APP_BUNDLE_VERSION="${MUESLI_BUNDLE_VERSION:-$APP_VERSION}"
 APP_SHORT_VERSION="${MUESLI_SHORT_VERSION:-$APP_VERSION}"
-SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-https://muesli-hq.github.io/muesli/appcast.xml}"
+SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-}"
 SPARKLE_EDKEY="${MUESLI_SPARKLE_EDKEY-ok9CQBJ3f0MJ2GXuGBubc6VyeWyb5exmqP2b9DceqH4=}"
 STAGED_APP_DIR="$DIST_DIR/$APP_BUNDLE_NAME"
 APP_DIR="$INSTALL_DIR/$APP_BUNDLE_NAME"
@@ -45,7 +45,7 @@ BUNDLE_THIN_ARCH="${MUESLI_BUNDLE_THIN_ARCH:-arm64}"
 # MUESLI_USE_XCODE_BUILD=1 explicitly when testing Shortcuts by hand.
 USE_XCODE_BUILD="${MUESLI_USE_XCODE_BUILD:-0}"
 XCODE_PROJECT_DIR="$ROOT/native/MuesliXcode"
-XCODE_PRODUCT_NAME="Muesli"
+XCODE_PRODUCT_NAME="MuesliPlus"
 
 thin_macho_to_bundle_arch() {
   local binary="$1"
@@ -385,6 +385,8 @@ cat > "$STAGED_APP_DIR/Contents/Info.plist" <<PLIST
   <string>14.2</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>$APP_DISPLAY_NAME records microphone audio for dictation.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>$APP_DISPLAY_NAME uses the camera only when you start an experimental lip-dictation test.</string>
   <key>NSInputMonitoringUsageDescription</key>
   <string>$APP_DISPLAY_NAME monitors keyboard events to trigger push-to-talk dictation.</string>
   <key>NSAudioCaptureUsageDescription</key>

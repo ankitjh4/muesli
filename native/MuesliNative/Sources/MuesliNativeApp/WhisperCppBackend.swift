@@ -46,9 +46,10 @@ actor WhisperKitTranscriber {
                 computeOptions: ModelComputeOptions(
                     audioEncoderCompute: .cpuAndNeuralEngine,
                     textDecoderCompute: .cpuAndNeuralEngine
-                )
+                ),
+                download: false
             )
-            return try await WhisperKit(config)
+            return try await ManagedWhisperKit(config)
         }
 
         whisperKit = loadedWhisperKit

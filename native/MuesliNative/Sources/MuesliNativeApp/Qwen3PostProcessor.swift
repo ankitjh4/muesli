@@ -1,5 +1,6 @@
 import Foundation
 import LLM
+import MuesliCore
 
 enum Qwen3PostProcessorLogging {
     private static let verboseEnv = "MUESLI_DEBUG_POSTPROC_LOGS"
@@ -274,6 +275,7 @@ private actor Qwen3PostProcessorManager {
     private let systemPrompt: String
     private let inputFormat: PostProcessorOption.InputFormat
     private let maxTokenCount: Int32
+    private let sampling: Qwen3PostProcessor.Sampling
     private var bot: LLM?
     private let inferenceGate = InferenceGate()
 
@@ -281,12 +283,14 @@ private actor Qwen3PostProcessorManager {
         modelURL: URL,
         systemPrompt: String,
         inputFormat: PostProcessorOption.InputFormat,
-        maxTokenCount: Int32
+        maxTokenCount: Int32,
+        sampling: Qwen3PostProcessor.Sampling
     ) {
         self.modelURL = modelURL
         self.systemPrompt = systemPrompt
         self.inputFormat = inputFormat
         self.maxTokenCount = maxTokenCount
+        self.sampling = sampling
     }
 
     func warm() throws {
@@ -299,7 +303,8 @@ private actor Qwen3PostProcessorManager {
         do {
             try Task.checkCancellation()
             let bot = try loadBot()
-            defer { bot.reset() }
+            // historyLimit is zero. respond() clears history and awaits context
+            // reset before the next request; reset() would spawn unawaited work.
             let formattedInput: String
             switch inputFormat {
             case .configurable:
@@ -338,7 +343,7 @@ private actor Qwen3PostProcessorManager {
         do {
             try Task.checkCancellation()
             let bot = try loadBot()
-            defer { bot.reset() }
+            // Avoid reset(): its fire-and-forget task can outlive model teardown.
             await bot.respond(to: userPrompt, thinking: .suppressed)
             let raw = bot.output
             await inferenceGate.release()
@@ -354,10 +359,10 @@ private actor Qwen3PostProcessorManager {
         guard let loaded = LLM(
             from: modelURL,
             seed: 7,
-            topK: 1,
+            topK: sampling == .deterministic ? 1 : 20,
             topP: 1.0,
-            temp: 0.0,
-            repeatPenalty: 1.0,
+            temp: sampling == .vocabulary ? 1.0 : (sampling == .factual ? 0.2 : 0.0),
+            repeatPenalty: sampling == .deterministic ? 1.0 : 1.1,
             repetitionLookback: 64,
             historyLimit: 0,
             maxTokenCount: maxTokenCount
@@ -374,11 +379,13 @@ private actor Qwen3PostProcessorManager {
 
 @available(macOS 15, *)
 actor Qwen3PostProcessor {
+    enum Sampling: Hashable, Sendable { case deterministic, vocabulary, factual }
     struct Configuration: Hashable, Sendable {
         let modelURL: URL
         let systemPrompt: String
         let inputFormat: PostProcessorOption.InputFormat
         var maxTokenCount: Int32 = Qwen3PostProcessorConfig.maxContextTokens
+        var sampling: Sampling = .deterministic
     }
 
     private struct LoadTaskState {
@@ -447,12 +454,40 @@ actor Qwen3PostProcessor {
         return try await manager.generate(userPrompt)
     }
 
+    func generateBatch(_ prompts: [String], configuration: Configuration) async throws -> [String] {
+        let effective = Self.effectiveConfiguration(for: configuration)
+        let manager = try await loadManager(for: effective)
+        defer { if effective != activeConfiguration { managers[effective] = nil } }
+        var results: [String] = []
+        for prompt in prompts {
+            try Task.checkCancellation()
+            results.append(try await manager.generate(prompt))
+        }
+        return results
+    }
+
+    /// Keep one model alive for all Hindi spans, instead of loading its weights
+    /// again for every word. Each generation still resets the conversation.
+    func romanizeHindi(_ text: String, configuration: Configuration) async throws -> String {
+        let effectiveConfiguration = Self.effectiveConfiguration(for: configuration)
+        let manager = try await loadManager(for: effectiveConfiguration)
+        defer {
+            if effectiveConfiguration != activeConfiguration {
+                managers[effectiveConfiguration] = nil
+            }
+        }
+        return try await HindiRomanization.romanize(text) { word in
+            try await manager.generate(HindiRomanization.modelInput(for: word))
+        }
+    }
+
     nonisolated static func effectiveConfiguration(for configuration: Configuration) -> Configuration {
         Configuration(
             modelURL: Qwen3PostProcessorConfig.devOverrideURL() ?? configuration.modelURL,
             systemPrompt: configuration.systemPrompt,
             inputFormat: configuration.inputFormat,
-            maxTokenCount: configuration.maxTokenCount
+            maxTokenCount: configuration.maxTokenCount,
+            sampling: configuration.sampling
         )
     }
 
@@ -482,7 +517,8 @@ actor Qwen3PostProcessor {
                 modelURL: url,
                 systemPrompt: prompt,
                 inputFormat: inputFormat,
-                maxTokenCount: maxTokenCount
+                maxTokenCount: maxTokenCount,
+                sampling: configuration.sampling
             )
             try await manager.warm()
             return manager

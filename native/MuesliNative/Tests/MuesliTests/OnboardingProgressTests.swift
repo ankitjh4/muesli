@@ -84,6 +84,35 @@ struct OnboardingProgressTests {
         #expect(decoded.modelDownloadStatus == "189 MB of 450 MB")
     }
 
+    @Test("meeting and Quill setup round-trip independently")
+    func meetingAndQuillSetupRoundTrip() throws {
+        let progress = OnboardingProgress(
+            currentStep: OnboardingFlow.Step.review.rawValue,
+            userName: "Test User",
+            selectedBackendKey: BackendOption.parakeetUnified.backend,
+            selectedModelKey: BackendOption.parakeetUnified.model,
+            selectedMeetingBackendKey: BackendOption.whisperSmall.backend,
+            selectedMeetingModelKey: BackendOption.whisperSmall.model,
+            hotkeyKeyCode: 55,
+            hotkeyLabel: "Left Cmd",
+            onboardingUseCaseRawValue: OnboardingUseCase.everything.rawValue,
+            summaryBackendKey: MeetingSummaryBackendOption.openRouter.backend,
+            quillEnabled: true,
+            quillBackendKey: TranscriptCleanupBackendOption.hosted(.chatGPT).backend
+        )
+
+        let decoded = try JSONDecoder().decode(
+            OnboardingProgress.self,
+            from: JSONEncoder().encode(progress)
+        )
+
+        #expect(decoded.selectedMeetingBackendKey == BackendOption.whisperSmall.backend)
+        #expect(decoded.selectedMeetingModelKey == BackendOption.whisperSmall.model)
+        #expect(decoded.summaryBackendKey == MeetingSummaryBackendOption.openRouter.backend)
+        #expect(decoded.quillEnabled)
+        #expect(decoded.quillBackendKey == TranscriptCleanupBackendOption.hosted(.chatGPT).backend)
+    }
+
     @Test("dictation monitor starts at and after its resume threshold")
     func dictationMonitorUsesResumeThreshold() {
         let threshold = OnboardingFlow.dictationTestStep
@@ -93,13 +122,18 @@ struct OnboardingProgressTests {
             dictationTestStep: threshold,
             modelReady: true
         ))
+        #expect(!OnboardingFlow.shouldStartDictationTestMonitor(
+            currentStep: OnboardingFlow.Step.appearance.rawValue,
+            dictationTestStep: threshold,
+            modelReady: true
+        ))
         #expect(OnboardingFlow.shouldStartDictationTestMonitor(
             currentStep: threshold,
             dictationTestStep: threshold,
             modelReady: true
         ))
         #expect(OnboardingFlow.shouldStartDictationTestMonitor(
-            currentStep: threshold + 1,
+            currentStep: OnboardingFlow.Step.calendarAccess.rawValue,
             dictationTestStep: threshold,
             modelReady: true
         ))
@@ -190,6 +224,27 @@ struct OnboardingProgressTests {
         #expect(step == 3)
     }
 
+    @Test("appearance selection remains before the permission gate")
+    func appearanceSelectionRemainsBeforePermissionGate() {
+        let permissions = OnboardingPermissionSnapshot(
+            microphone: false,
+            accessibility: false,
+            inputMonitoring: false,
+            systemAudio: false,
+            screenRecording: false
+        )
+
+        let step = OnboardingPermissionGate.resumeStep(
+            requestedStep: OnboardingFlow.Step.appearance.rawValue,
+            permissions: permissions,
+            useCase: .dictation,
+            permissionsStep: OnboardingFlow.Step.permissions.rawValue,
+            dictationTestStep: OnboardingFlow.Step.dictationTest.rawValue
+        )
+
+        #expect(step == OnboardingFlow.Step.appearance.rawValue)
+    }
+
     @Test("meetings-only resume requires microphone before leaving permissions step")
     func meetingsOnlyResumeRequiresMicrophone() {
         let permissions = OnboardingPermissionSnapshot(
@@ -201,7 +256,7 @@ struct OnboardingProgressTests {
         )
 
         let step = OnboardingPermissionGate.resumeStep(
-            requestedStep: 5,
+            requestedStep: OnboardingFlow.Step.calendarAccess.rawValue,
             permissions: permissions,
             useCase: .meetings,
             permissionsStep: 3,
@@ -223,7 +278,7 @@ struct OnboardingProgressTests {
         )
 
         let step = OnboardingPermissionGate.resumeStep(
-            requestedStep: 5,
+            requestedStep: OnboardingFlow.Step.calendarAccess.rawValue,
             permissions: permissions,
             useCase: .meetings,
             permissionsStep: 3,
@@ -232,7 +287,7 @@ struct OnboardingProgressTests {
 
         #expect(OnboardingPermissionGate.hasRequiredMeetingPermissions(permissions))
         #expect(OnboardingPermissionGate.hasRequiredPermissions(permissions, for: .meetings))
-        #expect(step == 5)
+        #expect(step == OnboardingFlow.Step.calendarAccess.rawValue)
     }
 
     @Test("meetings-only cannot leave permissions without system audio")
@@ -246,7 +301,7 @@ struct OnboardingProgressTests {
         )
 
         let step = OnboardingPermissionGate.resumeStep(
-            requestedStep: 5,
+            requestedStep: OnboardingFlow.Step.calendarAccess.rawValue,
             permissions: permissions,
             useCase: .meetings,
             permissionsStep: 3,

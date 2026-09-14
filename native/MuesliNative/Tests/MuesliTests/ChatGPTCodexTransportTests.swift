@@ -52,7 +52,7 @@ struct ChatGPTResponsesTransportTests {
         #expect(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "account-123")
         #expect(request.value(forHTTPHeaderField: "originator") == "muesli")
         #expect(request.value(forHTTPHeaderField: "version") == nil)
-        #expect(request.value(forHTTPHeaderField: "User-Agent") == "Muesli/1.2.3")
+        #expect(request.value(forHTTPHeaderField: "User-Agent") == "Muesli+/1.2.3")
         #expect(request.value(forHTTPHeaderField: "session_id") == sessionID.uuidString.lowercased())
         #expect(request.value(forHTTPHeaderField: "OpenAI-Beta") == nil)
 

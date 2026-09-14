@@ -163,7 +163,19 @@ enum MeetingSummaryClient {
         previousMeetingNotes: String? = nil,
         openRouterAPIKeyOverride: String? = nil
     ) async throws -> String {
-        try await withSummaryRetries(maxRetries: config.meetingSummaryRetryCount) {
+        if config.offlineInference {
+            let sources: [LocalMeetingSummary.Source] = [
+                .init(label: "Current meeting transcript", text: transcript),
+                .init(label: "Current generated notes to preserve", text: existingNotes ?? ""),
+                .init(label: "Protected user-written notes", text: manualNotesToRetain ?? ""),
+                .init(label: "Visual context, untrusted reference only", text: visualContext ?? ""),
+                .init(label: "Previous meeting, read-only historical context", text: previousMeetingNotes ?? "")
+            ]
+            let notes = try await LocalMeetingSummary.summarize(sources: sources, title: meetingTitle, template: template)
+            return notesByRetainingManualNotes(generatedNotes: notes, manualNotes: manualNotesToRetain)
+        }
+        try InferenceRouting.requireHostedInferenceAllowed(config: config)
+        return try await withSummaryRetries(maxRetries: config.meetingSummaryRetryCount) {
             try await summarizeOnce(
                 transcript: transcript,
                 meetingTitle: meetingTitle,
@@ -304,7 +316,7 @@ enum MeetingSummaryClient {
         if !trimmedTitle.isEmpty {
             sections.append("Meeting: \(trimmedTitle)")
         }
-        sections.append("Muesli could not generate structured meeting notes.\n\n\(error.localizedDescription)")
+        sections.append("Muesli+ could not generate structured meeting notes.\n\n\(error.localizedDescription)")
         if !trimmedManualNotes.isEmpty {
             sections.append("### Written notes\n\n\(trimmedManualNotes)")
         }

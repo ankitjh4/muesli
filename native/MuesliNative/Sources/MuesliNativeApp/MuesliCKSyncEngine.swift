@@ -123,7 +123,7 @@ struct MuesliCKSyncLegacyScopeMigration: Sendable, Equatable {
     let stateKey: String
 }
 
-/// Owns the single CKSyncEngine instance for Muesli's private text-record zone.
+/// Owns the single CKSyncEngine instance for Muesli+'s private text-record zone.
 ///
 /// SQLite's `sync_dirty` flags remain the durable outbox. Before every send we
 /// rediscover dirty rows and add their stable record IDs to CKSyncEngine state,
@@ -298,7 +298,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                 throw error
             }
 
-            // The private zone can be deleted while Muesli is running. Recreate it
+            // The private zone can be deleted while Muesli+ is running. Recreate it
             // once and retry once; subsequent failures remain CKSyncEngine-managed.
             await invalidatePreparation(cancelEngine: true)
             let syncEngine = try await prepareEngine()
@@ -677,7 +677,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                     targetZoneFetchProcessingFailed = true
                     throw error
                 }
-                // Muesli represents deletion as a saved tombstone. Hard-deletion
+                // Muesli+ represents deletion as a saved tombstone. Hard-deletion
                 // notifications are intentionally ignored for this record contract.
 
             case .sentRecordZoneChanges(let changes):
@@ -811,7 +811,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                let remote = MuesliICloudSyncEngine.syncTextRecord(from: serverRecord),
                let local = try store.textRecordForSync(recordName: recordID.recordName) {
                 // The serverRecordChanged error itself proves the saved version is
-                // stale, so last-write-wins depends only on Muesli's updatedAt field.
+                // stale, so last-write-wins depends only on Muesli+'s updatedAt field.
                 if remote.updatedAt > local.updatedAt {
                     _ = try store.upsertSyncedTextRecord(remote)
                     state.remove(pendingRecordZoneChanges: [pending])

@@ -1,6 +1,13 @@
 import Foundation
 
 enum OnboardingFlow {
+    enum LaunchDestination: Equatable { case setup, dashboard, background }
+
+    static func launchDestination(completedSetup: Bool, recordingPermissionsReady: Bool, openDashboard: Bool) -> LaunchDestination {
+        guard completedSetup else { return .setup }
+        return openDashboard || !recordingPermissionsReady ? .dashboard : .background
+    }
+
     struct UseCaseSelectionState: Equatable {
         let selectedUseCase: OnboardingUseCase
         let selectionBeforeEverything: OnboardingUseCase?
@@ -26,9 +33,52 @@ enum OnboardingFlow {
         case dictationTest = 4
         case meetingSummary = 5
         case calendarAccess = 6
+        // Keep the original raw values stable because onboarding progress is persisted.
+        case appearance = 7
+        case learn = 8
+        case meetingTranscription = 9
+        case quill = 10
+        case review = 11
+        case vocabulary = 12
     }
 
     static let dictationTestStep = Step.dictationTest.rawValue
+
+    private static let canonicalStepOrder: [Step] = [
+        .welcome,
+        .learn,
+        .model,
+        .meetingTranscription,
+        .meetingSummary,
+        .quill,
+        .vocabulary,
+        .appearance,
+        .hotkey,
+        .permissions,
+        .dictationTest,
+        .calendarAccess,
+        .review,
+    ]
+
+    private static func position(of rawStep: Int) -> Int? {
+        canonicalStepOrder.firstIndex { $0.rawValue == rawStep }
+    }
+
+    private static func isStep(_ rawStep: Int, after otherRawStep: Int) -> Bool {
+        guard let position = position(of: rawStep),
+              let otherPosition = Self.position(of: otherRawStep) else {
+            return rawStep > otherRawStep
+        }
+        return position > otherPosition
+    }
+
+    static func isStep(_ rawStep: Int, atOrAfter otherRawStep: Int) -> Bool {
+        guard let position = position(of: rawStep),
+              let otherPosition = Self.position(of: otherRawStep) else {
+            return rawStep >= otherRawStep
+        }
+        return position >= otherPosition
+    }
 
     /// Reconfirm a restored model whenever sanitization replaces it, without skipping
     /// earlier setup steps or discarding the permission gate for unchanged selections.
@@ -40,12 +90,23 @@ enum OnboardingFlow {
     ) -> Int {
         let mustChooseModel = resolvedBackend != initialBackend
             || !initialBackend.isCompatible(currentOSVersion: currentOSVersion)
-        return mustChooseModel && requestedStep > Step.model.rawValue
+        return mustChooseModel && isStep(requestedStep, after: Step.model.rawValue)
             ? Step.model.rawValue : requestedStep
     }
 
+    /// A resumed setup must not jump past an unfinished model or account choice.
+    /// This is shared by meeting transcription and optional Quill setup.
+    static func setupGatedResumeStep(
+        requestedStep: Int,
+        setupStep: Step,
+        isReady: Bool
+    ) -> Int {
+        !isReady && isStep(requestedStep, after: setupStep.rawValue)
+            ? setupStep.rawValue : requestedStep
+    }
+
     static func hasCompletedPermissionsStep(resumingAt step: Int) -> Bool {
-        step > Step.permissions.rawValue
+        isStep(step, after: Step.permissions.rawValue)
     }
 
     static func shouldSchedulePermissionAdvance(
@@ -111,7 +172,7 @@ enum OnboardingFlow {
         dictationTestStep: Int,
         modelReady: Bool
     ) -> Bool {
-        modelReady && currentStep >= dictationTestStep
+        modelReady && isStep(currentStep, atOrAfter: dictationTestStep)
     }
 
     static func dictationTestMonitorAction(
@@ -121,7 +182,7 @@ enum OnboardingFlow {
         monitorActive: Bool,
         dictationTesting: Bool
     ) -> DictationTestMonitorAction {
-        guard currentStep >= dictationTestStep else { return .none }
+        guard isStep(currentStep, atOrAfter: dictationTestStep) else { return .none }
         guard currentStep == dictationTestStep else {
             return monitorActive ? .stop(cancelTestDictation: dictationTesting) : .none
         }
@@ -132,22 +193,44 @@ enum OnboardingFlow {
     }
 
     static func orderedSteps(for useCase: OnboardingUseCase) -> [Int] {
-        var steps = [Step.welcome.rawValue, Step.model.rawValue]
+        var steps = [Step.welcome.rawValue, Step.learn.rawValue]
         if useCase.includesPushToTalk {
-            steps += [Step.hotkey.rawValue, Step.permissions.rawValue, Step.dictationTest.rawValue]
-        } else if useCase.includesMeetings {
-            steps += [Step.permissions.rawValue]
+            steps.append(Step.model.rawValue)
         }
         if useCase.includesMeetings {
-            steps += [Step.meetingSummary.rawValue, Step.calendarAccess.rawValue]
+            steps += [Step.meetingTranscription.rawValue, Step.meetingSummary.rawValue]
         }
+        if useCase.includesDictation {
+            steps.append(Step.quill.rawValue)
+        }
+        steps.append(Step.vocabulary.rawValue)
+        steps.append(Step.appearance.rawValue)
+        if useCase.includesPushToTalk {
+            steps.append(Step.hotkey.rawValue)
+        }
+        steps.append(Step.permissions.rawValue)
+        if useCase.includesPushToTalk {
+            steps.append(Step.dictationTest.rawValue)
+        }
+        if useCase.includesMeetings {
+            steps.append(Step.calendarAccess.rawValue)
+        }
+        steps.append(Step.review.rawValue)
         return steps
     }
 
     static func normalizedStep(_ step: Int, for useCase: OnboardingUseCase) -> Int {
         let steps = orderedSteps(for: useCase)
         if steps.contains(step) { return step }
-        return steps.first { $0 > step } ?? steps.last ?? Step.welcome.rawValue
+        guard let requestedPosition = position(of: step) else {
+            return steps.last ?? Step.welcome.rawValue
+        }
+        return canonicalStepOrder
+            .dropFirst(requestedPosition + 1)
+            .map(\.rawValue)
+            .first(where: steps.contains)
+            ?? steps.last
+            ?? Step.welcome.rawValue
     }
 
     static func stepIndex(_ step: Int, for useCase: OnboardingUseCase) -> Int {

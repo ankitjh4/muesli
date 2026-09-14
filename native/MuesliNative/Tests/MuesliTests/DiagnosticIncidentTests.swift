@@ -33,7 +33,7 @@ struct DiagnosticIncidentTests {
         )
 
         let params = incident.telemetryParameters
-        #expect(incident.telemetryErrorID == "Muesli.Diagnostic.dictation_transcription_failed.unclassified")
+        #expect(incident.telemetryErrorID == "Muesli+.Diagnostic.dictation_transcription_failed.unclassified")
         #expect(incident.telemetryCategory == .thrownException)
         #expect(incident.userImpact == .operationBlocked)
         #expect(params["diagnostic.schema_version"] == "2")
@@ -71,7 +71,7 @@ struct DiagnosticIncidentTests {
             metadata: metadata
         )
 
-        #expect(incident.telemetryErrorID == "Muesli.Diagnostic.dictation_audio_failed.microphonerecorder.3")
+        #expect(incident.telemetryErrorID == "Muesli+.Diagnostic.dictation_audio_failed.microphonerecorder.3")
         #expect(incident.errorMeaning?.summary == "Preferred microphone input could not be selected")
         #expect(incident.errorMeaning?.area == "audio_route_selection")
         #expect(incident.telemetryParameters["diagnostic.error_known"] == "true")
@@ -117,7 +117,7 @@ struct DiagnosticIncidentTests {
 
         #expect(incident.telemetryCategory == .appState)
         #expect(incident.errorFingerprint.signature == "streaming_controller_start_failed")
-        #expect(incident.telemetryErrorID == "Muesli.Diagnostic.streaming_dictation_start_failed.streaming_controller_start_failed")
+        #expect(incident.telemetryErrorID == "Muesli+.Diagnostic.streaming_dictation_start_failed.streaming_controller_start_failed")
         #expect(incident.telemetryParameters["diagnostic.error_known"] == "true")
         #expect(incident.telemetryParameters["diagnostic.error_domain"] == nil)
     }
@@ -225,10 +225,10 @@ struct DiagnosticIncidentTests {
         )
 
         let url = try #require(incident.githubIssueURL)
-        #expect(url.absoluteString.hasPrefix("https://github.com/Muesli-HQ/muesli/issues/new?"))
+        #expect(url.absoluteString.hasPrefix("https://github.com/ankitjh4/muesli/issues/new?"))
         #expect(url.absoluteString.contains("title="))
         #expect(url.absoluteString.contains("body="))
-        #expect(DiagnosticIncident.githubIssueFallbackURL.absoluteString == "https://github.com/Muesli-HQ/muesli/issues/new")
+        #expect(DiagnosticIncident.githubIssueFallbackURL.absoluteString == "https://github.com/ankitjh4/muesli/issues/new")
     }
 }
 

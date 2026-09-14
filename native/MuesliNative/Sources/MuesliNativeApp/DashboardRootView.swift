@@ -149,7 +149,7 @@ struct DashboardRootView: View {
             }
         }
         .alert(
-            appState.contributionMilestonePrompt?.title ?? "Muesli milestone",
+            appState.contributionMilestonePrompt?.title ?? "Muesli+ milestone",
             isPresented: Binding(
                 get: { appState.contributionMilestonePrompt != nil },
                 set: { if !$0 { controller.dismissContributionMilestonePrompt() } }
@@ -166,12 +166,12 @@ struct DashboardRootView: View {
                 }
             }
             if appState.contributionMilestonePrompt?.showTweetAboutMuesli == true {
-                Button("Tweet about Muesli") {
+                Button("Tweet about Muesli+") {
                     controller.openContributionMilestoneAction(.tweetAboutMuesli)
                 }
             }
             if appState.contributionMilestonePrompt?.showPostOnLinkedIn == true {
-                Button("Post about Muesli on LinkedIn") {
+                Button("Post about Muesli+ on LinkedIn") {
                     controller.openContributionMilestoneAction(.postOnLinkedIn)
                 }
             }
@@ -239,6 +239,8 @@ struct DashboardRootView: View {
             SearchResultsView(appState: appState, controller: controller)
         } else {
             switch appState.selectedTab {
+            case .home:
+                HomeView(appState: appState, controller: controller)
             case .timeline:
                 TimelineView(appState: appState, controller: controller)
             case .dictations:
@@ -254,6 +256,8 @@ struct DashboardRootView: View {
                 MeetingsView(appState: appState, controller: controller)
             case .dictionary:
                 DictionaryView(appState: appState, controller: controller)
+            case .lipDictation:
+                LipDictationView(onOpenModels: { controller.showModels(category: .quill) })
             case .models:
                 ModelsView(appState: appState, controller: controller)
             case .shortcuts:

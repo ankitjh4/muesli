@@ -41,7 +41,7 @@ actor FluidAudioTranscriber {
             )
             progress?(0.95, preparing.message)
             progressSnapshot?(preparing)
-            let models = try await AsrModels.load(from: modelDirectory, version: version)
+            let models = try LocalSpeechHelperLoader.loadParakeet(directory: modelDirectory, version: version)
             let manager = AsrManager(config: .default)
             try await manager.loadModels(models)
             return manager

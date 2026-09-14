@@ -7,6 +7,49 @@ import SQLite3
 
 @Suite("DictationStore", .serialized)
 struct DictationStoreTests {
+    @Test("partial audio imports are inserted atomically with incomplete status")
+    func partialAudioImportStatus() throws {
+        let store = try makeStore()
+        let start = Date()
+        let id = try store.insertMeeting(title: "Partial import", calendarEventID: nil,
+            startTime: start, endTime: start.addingTimeInterval(120),
+            rawTranscript: "Completed first portion", formattedNotes: "Partial notes",
+            micAudioPath: nil, systemAudioPath: nil, savedRecordingPath: "/test/recording.wav",
+            source: .audioImport, transcriptionIncomplete: true)
+        let record = try #require(try store.meeting(id: id))
+        #expect(record.status == .incomplete)
+        #expect(record.source == .audioImport)
+        #expect(record.wordCount == 3)
+        #expect(record.savedRecordingPath == "/test/recording.wav")
+    }
+
+    @Test("incomplete meeting completion retains text, count, and durable status")
+    func incompleteMeetingStatusPersists() throws {
+        let store = try makeStore()
+        let start = Date()
+        let id = try store.insertMeeting(title: "Partial test", calendarEventID: nil,
+            startTime: start, endTime: start.addingTimeInterval(60), rawTranscript: "", formattedNotes: "",
+            micAudioPath: nil, systemAudioPath: nil)
+        try store.completeLiveMeeting(id: id, title: "Partial test", calendarEventID: nil,
+            startTime: start, endTime: start.addingTimeInterval(60), rawTranscript: "Completed words remain",
+            formattedNotes: "Partial notes", micAudioPath: nil, systemAudioPath: nil, transcriptionIncomplete: true)
+        let savedMeeting = try store.meeting(id: id)
+        let meeting = try #require(savedMeeting)
+        #expect(meeting.status == .incomplete)
+        #expect(meeting.rawTranscript == "Completed words remain")
+        #expect(meeting.wordCount == 3)
+        let restored = try JSONDecoder().decode(MeetingRecord.self, from: JSONEncoder().encode(meeting))
+        #expect(restored.status == .incomplete)
+        #expect(restored.status.displayLabel == "Transcript incomplete")
+        let stats = try store.meetingStats()
+        #expect(stats.totalMeetings == 1)
+        #expect(stats.totalWords == 3)
+        let insights = try store.insightsSnapshot(range: .allTime)
+        #expect(insights.selected.meetings == 1)
+        #expect(insights.selected.meetingWords == 3)
+        #expect(insights.dailyActivity.reduce(0) { $0 + $1.meetings } == 1)
+    }
+
 
     /// Creates a DictationStore backed by a temporary database file.
     /// Each test gets its own isolated DB — no production data is touched.

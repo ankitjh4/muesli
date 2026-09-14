@@ -125,7 +125,7 @@ final class MediaPlaybackController: MediaPlaybackManaging {
         pauseState = .idle
         // We only paused media we confirmed was playing, so resume it unless
         // something is actively playing again. Unknown still restores to avoid
-        // leaving media stranded after Muesli paused it.
+        // leaving media stranded after Muesli+ paused it.
         guard playbackState != .playing else { return }
         client.sendMediaPlayPauseToggle()
     }

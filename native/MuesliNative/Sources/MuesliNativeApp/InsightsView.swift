@@ -153,7 +153,7 @@ struct InsightsView: View {
     private func hero(_ data: InsightsSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 6) {
-                    Text("Your time with Muesli")
+                    Text("Your time with Muesli+")
                         .font(.system(size: 18, weight: .semibold))
                         .tracking(-0.4)
                         .foregroundStyle(MuesliTheme.textPrimary)

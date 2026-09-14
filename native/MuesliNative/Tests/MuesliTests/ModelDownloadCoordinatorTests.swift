@@ -139,6 +139,16 @@ private final class ModelDownloadTestURLProtocol: URLProtocol {
             return
         }
 
+        // Do not sleep on URLSession's protocol callback thread. That prevents
+        // stopLoading() delivery and interferes with unrelated transport tests.
+        DispatchQueue.global(qos: .utility).async { [self] in
+            deliver(response, url: url)
+        }
+    }
+
+    private func deliver(_ response: Response, url: URL) {
+        guard !stopped else { return }
+
         response.tracker?.started()
         defer { response.tracker?.finished() }
         var headers = response.headers
@@ -178,6 +188,75 @@ private final class ModelDownloadTestURLProtocol: URLProtocol {
 
 @Suite("ModelDownloadCoordinator", .serialized)
 struct ModelDownloadCoordinatorTests {
+    @Test("offline reuses verified files but refuses missing files without a request")
+    func offlineCachedAndMissingFiles() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bytes = Data("cached model".utf8)
+        try bytes.write(to: directory.appendingPathComponent("model.bin"))
+        let tracker = DownloadTestTracker()
+        ModelDownloadTestURLProtocol.install { _ in .init(data: bytes, tracker: tracker) }
+        defer { ModelDownloadTestURLProtocol.uninstall() }
+        let policy = ModelNetworkPolicy(allowed: false)
+        let coordinator = ModelDownloadCoordinator(configuration: makeSessionConfiguration(), networkPolicy: policy)
+        let manifest = ModelDownloadManifest(id: "offline-cache", version: "1", files: [
+            ModelDownloadFile(relativePath: "model.bin", remoteURL: URL(string: "https://example.com/model")!, expectedByteCount: Int64(bytes.count), sha256: sha256(bytes))
+        ])
+        try await coordinator.download(manifest, to: directory)
+        #expect(tracker.requestCount == 0)
+        let missing = directory.appendingPathComponent("missing")
+        do {
+            try await coordinator.download(manifest, to: missing)
+            Issue.record("Missing weights must not download offline")
+        } catch is ModelNetworkPolicy.OfflineError {}
+        #expect(tracker.requestCount == 0)
+        policy.setAllowed(true)
+        try await coordinator.download(manifest, to: missing)
+        #expect(tracker.requestCount == 1)
+    }
+
+    @Test("offline refuses remote metadata discovery before transport")
+    func offlineMetadataDiscovery() async throws {
+        let policy = ModelNetworkPolicy(allowed: false)
+        let tracker = DownloadTestTracker()
+        ModelDownloadTestURLProtocol.install { _ in .init(data: Data(), tracker: tracker) }
+        defer { ModelDownloadTestURLProtocol.uninstall() }
+        let resolver = MuesliModelMirrorManifestResolver(configuration: makeSessionConfiguration(), networkPolicy: policy)
+        do {
+            _ = try await resolver.resolve(modelID: "test", mirror: MuesliModelMirror(manifestURL: URL(string: "https://assets.muesli.works/models/test/manifest.json")!))
+            Issue.record("Manifest discovery must not run offline")
+        } catch is ModelNetworkPolicy.OfflineError {}
+        let session = URLSession(configuration: makeSessionConfiguration())
+        defer { session.invalidateAndCancel() }
+        do {
+            _ = try await policy.data(for: URLRequest(url: URL(string: "https://huggingface.co/api/models/test/tree/main")!), session: session)
+            Issue.record("Metadata transport must not run offline")
+        } catch is ModelNetworkPolicy.OfflineError {}
+        #expect(tracker.requestCount == 0)
+    }
+
+    @Test("switching offline cancels an admitted metadata request")
+    func offlineCancelsMetadataRequest() async throws {
+        let policy = ModelNetworkPolicy()
+        let tracker = DownloadTestTracker()
+        ModelDownloadTestURLProtocol.install { _ in
+            .init(data: Data(repeating: 65, count: 512 * 1024), chunkSize: 1024, delay: 0.005, tracker: tracker)
+        }
+        defer { ModelDownloadTestURLProtocol.uninstall() }
+        let session = URLSession(configuration: makeSessionConfiguration())
+        defer { session.invalidateAndCancel() }
+        let task = Task {
+            try await policy.data(for: URLRequest(url: URL(string: "https://example.com/metadata")!), session: session)
+        }
+        #expect(tracker.waitUntilRequestStarts())
+        policy.setAllowed(false)
+        do {
+            _ = try await task.value
+            Issue.record("An admitted request must be cancelled on an offline transition")
+        } catch is ModelNetworkPolicy.OfflineError {}
+        #expect(tracker.requestCount == 1)
+    }
+
     @Test("manifest totals known file sizes")
     func manifestTotalsKnownFileSizes() throws {
         let manifest = ModelDownloadManifest(
@@ -1305,6 +1384,21 @@ struct ModelDownloadCoordinatorTests {
         #expect(ManagedASRModelPlans.whisperKit(modelName: "distil-large-v3").mirror == nil)
     }
 
+    @Test("Romanized Hinglish uses its pinned community WhisperKit conversion")
+    func romanizedHinglishWhisperKitPlan() {
+        let plan = ManagedASRModelPlans.whisperKit(
+            modelName: ManagedASRModelPlans.hinglishWhisperKitModelName
+        )
+
+        #expect(plan.repository == ManagedASRModelPlans.hinglishWhisperKitRepository)
+        #expect(plan.revision == ManagedASRModelPlans.hinglishWhisperKitRevision)
+        #expect(plan.cacheDirectory.lastPathComponent == ManagedASRModelPlans.hinglishWhisperKitModelName)
+        #expect(plan.selections[0].remoteDirectory == ManagedASRModelPlans.hinglishWhisperKitModelName)
+        #expect(plan.selections[0].includedPaths.contains("AudioEncoder.mlmodelc"))
+        #expect(plan.selections[0].includedPaths.contains("generation_config.json"))
+        #expect(plan.mirror == nil)
+    }
+
     @Test("English-only Whisper checkpoints use their exact downloadable cache identities")
     func englishWhisperCheckpointAvailability() throws {
         let root = try makeTemporaryDirectory()
@@ -1441,6 +1535,46 @@ struct ModelDownloadCoordinatorTests {
         // legacy-cache repair contract.
         #expect(tracker.requestCount >= 2)
         #expect(plan.isComplete())
+    }
+
+    @Test("offline validation failure preserves cache and never requests repair")
+    func offlineLegacyValidationPreservesCache() async throws {
+        let tracker = DownloadTestTracker()
+        ModelDownloadTestURLProtocol.install { _ in
+            ModelDownloadTestURLProtocol.Response(data: Data(), tracker: tracker)
+        }
+        defer { ModelDownloadTestURLProtocol.uninstall() }
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let plan = ManagedASRModelPlan(
+            modelID: "legacy-offline-validation",
+            repository: "acme/asr",
+            cacheDirectory: root.appendingPathComponent("model", isDirectory: true),
+            selections: [HuggingFaceModelSelection(includedPaths: ["model.bin"])],
+            requiredArtifactAlternatives: [["model.bin"]]
+        )
+        try FileManager.default.createDirectory(at: plan.cacheDirectory, withIntermediateDirectories: true)
+        let modelURL = plan.cacheDirectory.appendingPathComponent("model.bin")
+        let original = Data("invalid but preserved".utf8)
+        try original.write(to: modelURL)
+        let policy = ModelNetworkPolicy(allowed: false)
+        do {
+            _ = try await ManagedASRModelDownloader.loadValidated(
+                plan,
+                resolver: HuggingFaceModelManifestResolver(configuration: makeSessionConfiguration(), networkPolicy: policy),
+                coordinator: ModelDownloadCoordinator(configuration: makeSessionConfiguration(), networkPolicy: policy),
+                networkPolicy: policy
+            ) { _ -> String in
+                throw NSError(domain: "OfflineValidationFixture", code: 42)
+            }
+            Issue.record("Expected the original validation failure")
+        } catch {
+            #expect((error as NSError).domain == "OfflineValidationFixture")
+            #expect((error as NSError).code == 42)
+        }
+        #expect(try Data(contentsOf: modelURL) == original)
+        #expect(plan.requiresRuntimeValidation())
+        #expect(tracker.requestCount == 0)
     }
 
     @Test("cancelled legacy validation preserves the offline cache")

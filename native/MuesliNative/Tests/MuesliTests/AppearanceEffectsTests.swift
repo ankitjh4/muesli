@@ -2,6 +2,22 @@ import Testing
 import AppKit
 @testable import MuesliNativeApp
 
+@Suite("MuesliColorTheme")
+struct MuesliColorThemeTests {
+    @Test("installer offers six unique light-first color themes")
+    func offersSixThemes() {
+        #expect(MuesliColorTheme.allCases.count == 6)
+        #expect(Set(MuesliColorTheme.allCases.map(\.hex)).count == 6)
+        #expect(MuesliColorTheme.allCases.contains(.molokai))
+    }
+
+    @Test("legacy default resolves to Clean")
+    func legacyDefaultResolvesToClean() {
+        #expect(MuesliColorTheme.resolved(for: "1e1e2e") == .clean)
+        #expect(MuesliColorTheme.resolved(for: "#f92672") == .molokai)
+    }
+}
+
 @Suite("SoundController")
 @MainActor
 struct SoundControllerTests {
@@ -72,6 +88,33 @@ struct MenuBarIconRendererTests {
         #expect((image?.size.height ?? 0) > 0)
     }
 
+    @Test("icon picker offers 34 unique built-in identities")
+    func builtInIdentityChoicesAreComplete() {
+        let ids = MenuBarIconRenderer.options.map(\.id)
+        let labels = MenuBarIconRenderer.options.map(\.label)
+
+        #expect(ids.count == 34)
+        #expect(Set(ids).count == ids.count)
+        #expect(Set(labels).count == labels.count)
+        #expect(ids.contains("bird.fill"))
+        #expect(ids.contains("emoji:🐐"))
+    }
+
+    @Test("custom emoji choices normalize one grapheme and preserve color")
+    func customEmojiChoices() {
+        #expect(MenuBarIconRenderer.choice(forEmoji: "  🐐  ") == "emoji:🐐")
+        #expect(MenuBarIconRenderer.choice(forEmoji: "👩🏽‍💻") == "emoji:👩🏽‍💻")
+        #expect(MenuBarIconRenderer.choice(forEmoji: "goat") == nil)
+        #expect(MenuBarIconRenderer.choice(forEmoji: "1") == nil)
+        #expect(MenuBarIconRenderer.choice(forEmoji: "🐐🐦") == nil)
+
+        let image = MenuBarIconRenderer.make(choice: "emoji:🐐")
+        #expect(image != nil)
+        #expect(image?.isTemplate == false)
+        #expect(MenuBarIconRenderer.emoji(from: "emoji:🐐") == "🐐")
+        #expect(MenuBarIconRenderer.isEmojiChoice("emoji:🐐"))
+    }
+
     @Test("official mark is a resolution-independent template")
     func officialMarkIsResolutionIndependent() {
         let image = MenuBarIconRenderer.make(choice: "muesli")
@@ -123,5 +166,36 @@ struct MenuBarIconRendererTests {
 
         #expect(withoutHotkey.string == "Meeting in 5m")
         #expect(withoutEither.string.isEmpty)
+    }
+
+    @Test("word counts use whole-number k, m, b, and T summaries")
+    func compactWordCountUsesWholeNumberSuffixes() {
+        #expect(MenuBarIconRenderer.compactWordCount(-1) == "0")
+        #expect(MenuBarIconRenderer.compactWordCount(0) == "0")
+        #expect(MenuBarIconRenderer.compactWordCount(999) == "999")
+        #expect(MenuBarIconRenderer.compactWordCount(1_000) == "1k")
+        #expect(MenuBarIconRenderer.compactWordCount(1_999) == "1k")
+        #expect(MenuBarIconRenderer.compactWordCount(999_999) == "999k")
+        #expect(MenuBarIconRenderer.compactWordCount(1_000_000) == "1m")
+        #expect(MenuBarIconRenderer.compactWordCount(2_999_999_999) == "2b")
+        #expect(MenuBarIconRenderer.compactWordCount(1_000_000_000_000) == "1T")
+    }
+
+    @Test("word count remains visible when the hotkey cue is hidden")
+    func statusWordCountIsIndependentOfHotkeyCue() {
+        let countOnly = MenuBarIconRenderer.statusTitle(
+            hotkey: .default,
+            showsHotkey: false,
+            wordCount: 12_345
+        )
+        let countWithDetail = MenuBarIconRenderer.statusTitle(
+            hotkey: .default,
+            showsHotkey: false,
+            wordCount: 12_345,
+            detail: "Meeting in 5m"
+        )
+
+        #expect(countOnly.string == "\u{2009}12k")
+        #expect(countWithDetail.string == "\u{2009}12k  Meeting in 5m")
     }
 }

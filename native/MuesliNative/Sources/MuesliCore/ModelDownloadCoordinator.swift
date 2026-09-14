@@ -254,7 +254,7 @@ private struct DownloadFileKey: Hashable, Sendable {
     let relativePath: String
 }
 
-/// Shared resumable downloader for Muesli-owned model artifacts.
+/// Shared resumable downloader for Muesli+-owned model artifacts.
 public actor ModelDownloadCoordinator {
     /// The process-wide coordinator used by model backends and the UI.
     public static let shared = ModelDownloadCoordinator()
@@ -272,6 +272,7 @@ public actor ModelDownloadCoordinator {
     private var initialProgressBytes: [DownloadJobKey: Int64] = [:]
     private let sessionDelegate: ModelDownloadSessionDelegate
     private let session: URLSession
+    private let networkPolicy: ModelNetworkPolicy
 
     /// Creates a coordinator using the standard model-download URL session configuration.
     public init() {
@@ -279,7 +280,8 @@ public actor ModelDownloadCoordinator {
     }
 
     /// Creates a coordinator with a custom URL session configuration, primarily for tests.
-    public init(configuration: URLSessionConfiguration) {
+    public init(configuration: URLSessionConfiguration, networkPolicy: ModelNetworkPolicy = .shared) {
+        self.networkPolicy = networkPolicy
         let delegate = ModelDownloadSessionDelegate()
         sessionDelegate = delegate
         session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
@@ -501,6 +503,8 @@ public actor ModelDownloadCoordinator {
                 return
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let error as ModelNetworkPolicy.OfflineError {
+                throw error
             } catch let error as URLError where error.code == .timedOut {
                 lastError = ModelDownloadError.stalled(file.relativePath)
                 didResetPartialForAttempt = false
@@ -536,6 +540,7 @@ public actor ModelDownloadCoordinator {
                     attempt += 1
                 }
             } catch {
+                try networkPolicy.requireAllowed()
                 lastError = error
                 didResetPartialForAttempt = false
                 attempt += 1
@@ -565,13 +570,14 @@ public actor ModelDownloadCoordinator {
         let sink = ModelDownloadTaskSink()
         let task = session.dataTask(with: request)
         sessionDelegate.register(sink, for: task.taskIdentifier)
-        task.resume()
-
+        let networkID = UUID()
         var completed = false
         defer {
+            networkPolicy.finish(networkID)
             sessionDelegate.unregister(task.taskIdentifier)
             if !completed { task.cancel() }
         }
+        try networkPolicy.resume(task, id: networkID)
 
         var append = false
         var expected: Int64?

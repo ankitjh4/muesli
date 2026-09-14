@@ -400,7 +400,7 @@ final class AccessibilityPermissionGuideController {
                 contentView: NSHostingView(rootView: CompactAccessibilityPermissionGuideView(
                     appName: appName,
                     model: model
-                ).preferredColorScheme(.dark))
+                ).preferredColorScheme(.light))
             )
         }
 
@@ -427,7 +427,7 @@ final class AccessibilityPermissionGuideController {
                 }
                 // AppKit tells a dragging source that some destination accepted
                 // the URL, but not which System Settings view accepted it. Treat
-                // this as an attempted drop, never as proof that Muesli was added.
+                // this as an attempted drop, never as proof that Muesli+ was added.
                 self.model.didAttemptDrop = true
                 self.attemptedDropRetryDeadline = AccessibilityPermissionGuideRetryPolicy
                     .retryDeadline(startingAt: Date())
@@ -555,10 +555,10 @@ private struct CompactAccessibilityPermissionGuideView: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(AccessibilityPermissionGuideCopy.attemptedDropTitle(appName: appName))
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.94))
+                            .foregroundStyle(MuesliTheme.textPrimary)
                         Text(AccessibilityPermissionGuideCopy.attemptedDropDetail)
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.62))
+                            .foregroundStyle(MuesliTheme.textSecondary)
                     }
 
                     Spacer(minLength: 0)
@@ -574,7 +574,7 @@ private struct CompactAccessibilityPermissionGuideView: View {
 
                         Text(model.dragDirection.instruction)
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.72))
+                            .foregroundStyle(MuesliTheme.textSecondary)
                     }
 
                     Spacer(minLength: 82)
@@ -584,11 +584,11 @@ private struct CompactAccessibilityPermissionGuideView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: NSColor(red: 0.10, green: 0.12, blue: 0.14, alpha: 0.91)))
+        .background(Color.white.opacity(0.97))
         .clipShape(RoundedRectangle(cornerRadius: model.didAttemptDrop ? 14 : 18))
         .overlay(
             RoundedRectangle(cornerRadius: model.didAttemptDrop ? 14 : 18)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(Color.black.opacity(0.12), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.10), radius: 10, y: 4)
         .padding(2)
@@ -645,17 +645,17 @@ private struct PermissionGuideAppRow: View {
 
             Text(appName)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.94))
+                .foregroundStyle(MuesliTheme.textPrimary)
 
             Spacer()
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white.opacity(0.10))
+        .background(MuesliTheme.backgroundRaised)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                .stroke(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
 }
@@ -676,7 +676,7 @@ private final class AccessibilityPermissionDragSourceView: NSView, NSDraggingSou
         let hostingView = NSHostingView(rootView: AccessibilityPermissionDragRowView(
             appName: appName,
             appIcon: appIcon
-        ).preferredColorScheme(.dark))
+        ).preferredColorScheme(.light))
         hostingView.frame = bounds
         hostingView.autoresizingMask = [.width, .height]
         addSubview(hostingView)

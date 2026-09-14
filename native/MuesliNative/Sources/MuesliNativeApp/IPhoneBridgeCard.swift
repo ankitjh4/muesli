@@ -262,7 +262,7 @@ struct IPhoneBridgeCard: View {
                 controller.reconnectICloudSyncToCurrentAccount()
             }
         } message: {
-            Text("Muesli will reconnect this Mac to the currently signed-in iCloud account and resync eligible text. Local history and audio stay on this Mac.")
+            Text("Muesli+ will reconnect this Mac to the currently signed-in iCloud account and resync eligible text. Local history and audio stay on this Mac.")
         }
         .alert("Reset iCloud sync?", isPresented: $isResetConfirmationPresented) {
             Button("Cancel", role: .cancel) {}
@@ -270,7 +270,7 @@ struct IPhoneBridgeCard: View {
                 controller.resetICloudSync()
             }
         } message: {
-            Text("Muesli will turn off sync and clear this Mac's local iCloud sync state. Local history and audio stay on this Mac, and CloudKit data is not deleted. Turn sync on afterward to set up the currently signed-in iCloud account.")
+            Text("Muesli+ will turn off sync and clear this Mac's local iCloud sync state. Local history and audio stay on this Mac, and CloudKit data is not deleted. Turn sync on afterward to set up the currently signed-in iCloud account.")
         }
     }
 
@@ -382,7 +382,7 @@ struct IPhoneBridgeCard: View {
                 return "Waiting for your iPhone or iPad…"
             }
             if appState.iCloudBridgeCompanionDiscoveryState == .timedOut {
-                return "Couldn't find your device. Open Muesli there, then try again."
+                return "Couldn't find your device. Open Muesli+ there, then try again."
             }
             return "Connect another device to sync text."
         case .checkingICloud:
@@ -448,7 +448,7 @@ struct IPhoneBridgeCard: View {
             break
         }
         if flowAction == .waitingForDevice {
-            return "Waiting for Muesli on your other device"
+            return "Waiting for Muesli+ on your other device"
         }
         switch bridgeState {
         case .active:

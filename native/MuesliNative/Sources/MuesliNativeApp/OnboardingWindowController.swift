@@ -84,7 +84,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
             window.ignoresMouseEvents = true
         case .restoredWithoutActivation:
             // Leaving System Settings must make onboarding recoverable without
-            // activating Muesli over the application the user chose.
+            // activating Muesli+ over the application the user chose.
             window.level = .normal
             window.alphaValue = 1
             window.ignoresMouseEvents = false
@@ -110,30 +110,31 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
 
     private func buildWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 640),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
         )
-        window.title = "Welcome to Muesli"
+        window.title = "Welcome to Muesli+"
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.level = .floating
         window.collectionBehavior = [.moveToActiveSpace]
-        window.backgroundColor = NSColor(red: 0.067, green: 0.071, blue: 0.078, alpha: 1)
-        // OnboardingView forces .preferredColorScheme(.dark), so pin the window to the dark
-        // appearance rather than inheriting it. Without this the window follows whatever
-        // NSApp.appearance happens to be, and AppKit chrome the SwiftUI color scheme cannot
-        // reach (focus rings, panels, menus) renders light around permanently dark content.
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = .white
+        // Installation is deliberately light so its AppKit chrome, focus rings, menus,
+        // and SwiftUI content all agree before the user's saved appearance is applied.
+        window.appearance = NSAppearance(named: .aqua)
 
         let rootView: OnboardingView
         if let progress = resumeProgress {
             let backend = BackendOption.all.first(where: {
                 $0.backend == progress.selectedBackendKey && $0.model == progress.selectedModelKey
             }) ?? BackendOption.onboardingDefault
+            let meetingBackend = BackendOption.all.first(where: {
+                $0.backend == progress.selectedMeetingBackendKey && $0.model == progress.selectedMeetingModelKey
+            }) ?? backend
             let cohereLanguage = CohereTranscribeLanguage.resolved(progress.selectedCohereLanguageCode)
             let hotkey = HotkeyConfig(keyCode: progress.hotkeyKeyCode, label: progress.hotkeyLabel)
             rootView = OnboardingView(
@@ -142,11 +143,15 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                 initialStep: progress.currentStep,
                 initialUserName: progress.userName,
                 initialBackend: backend,
+                initialMeetingBackend: meetingBackend,
                 initialCohereLanguage: cohereLanguage,
                 initialHotkey: hotkey,
                 initialSystemAudioRequested: progress.systemAudioRequested,
                 initialUseCase: OnboardingUseCase.resolved(progress.onboardingUseCaseRawValue),
-                initialSummaryBackend: .chatGPT,
+                initialSummaryBackend: MeetingSummaryBackendOption.resolved(progress.summaryBackendKey),
+                initialQuillEnabled: progress.quillEnabled,
+                initialCleanupEnabled: progress.cleanupEnabled,
+                initialQuillBackend: TranscriptCleanupBackendOption.resolved(progress.quillBackendKey),
                 initialModelDownloadProgress: progress.modelDownloadProgress,
                 initialModelDownloadStatus: progress.modelDownloadStatus
             )
@@ -154,9 +159,15 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
             rootView = OnboardingView(
                 controller: controller,
                 appState: controller.appState,
+                initialBackend: controller.appState.selectedBackend,
+                initialMeetingBackend: controller.appState.selectedMeetingTranscriptionBackend,
                 initialCohereLanguage: controller.config.resolvedCohereLanguage,
                 initialUseCase: controller.config.resolvedOnboardingUseCase,
-                initialSummaryBackend: .chatGPT
+                initialSummaryBackend: MeetingSummaryBackendOption.resolved(controller.config.meetingSummaryBackend),
+                initialQuillEnabled: controller.config.enableQuilMode,
+                initialCleanupEnabled: controller.config.hasCompletedOnboarding
+                    ? (controller.config.enablePostProcessor || controller.config.pendingLocalCleanupSetup) : true,
+                initialQuillBackend: TranscriptCleanupBackendOption.resolved(controller.config.quilBackend)
             )
         }
         window.contentView = NSHostingView(rootView: rootView)

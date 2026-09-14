@@ -138,7 +138,7 @@ public final class DictationStore {
         CREATE INDEX IF NOT EXISTS idx_meetings_calendar_event_lookup ON meetings(calendar_event_id) WHERE calendar_event_id IS NOT NULL;
 
         -- Calendar attendee snapshots and manually selected people are device-local.
-        -- Contacts identifiers are never sent through Muesli's sync layer.
+        -- Contacts identifiers are never sent through Muesli+'s sync layer.
         CREATE TABLE IF NOT EXISTS meeting_participants (
             meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
             participant_identifier TEXT NOT NULL,
@@ -1097,15 +1097,16 @@ public final class DictationStore {
         selectedTemplatePrompt: String? = nil,
         source: MeetingSource = .meeting,
         calendarOccurrence: CalendarOccurrenceReference? = nil,
-        visualContext: String? = nil
+        visualContext: String? = nil,
+        transcriptionIncomplete: Bool = false
     ) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
 
         let sql = """
         INSERT INTO meetings
-        (title, calendar_event_id, start_time, end_time, duration_seconds, raw_transcript, formatted_notes, mic_audio_path, system_audio_path, saved_recording_path, word_count, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, updated_at, sync_dirty, calendar_occurrence_key, calendar_source, calendar_id, calendar_series_id, calendar_occurrence_start, visual_context)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+        (title, calendar_event_id, start_time, end_time, duration_seconds, raw_transcript, formatted_notes, mic_audio_path, system_audio_path, saved_recording_path, word_count, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, updated_at, sync_dirty, calendar_occurrence_key, calendar_source, calendar_id, calendar_series_id, calendar_occurrence_start, visual_context, meeting_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -1145,6 +1146,8 @@ public final class DictationStore {
             sqlite3_bind_null(statement, 22)
         }
         bindOptionalText(visualContext, at: 23, statement: statement)
+        bindOptionalText((transcriptionIncomplete ? MeetingStatus.incomplete : .completed).rawValue,
+                         at: 24, statement: statement)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -1802,7 +1805,7 @@ public final class DictationStore {
             COALESCE(SUM(CASE WHEN duration_seconds > 0 THEN duration_seconds ELSE 0 END), 0)
                 AS timed_duration_seconds
         FROM meetings
-        WHERE deleted_at IS NULL AND meeting_status IN (?, ?)
+        WHERE deleted_at IS NULL AND meeting_status IN (?, ?, ?)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -1811,6 +1814,7 @@ public final class DictationStore {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_text(statement, 1, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
         sqlite3_bind_text(statement, 2, (MeetingStatus.noteOnly.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (MeetingStatus.incomplete.rawValue as NSString).utf8String, -1, nil)
         guard sqlite3_step(statement) == SQLITE_ROW else {
             return MeetingStats(totalWords: 0, totalMeetings: 0, averageWPM: 0)
         }
@@ -1991,7 +1995,7 @@ public final class DictationStore {
             UNION ALL
             SELECT 'meeting', m.id, m.updated_at, m.start_time, m.word_count,
                    COALESCE(m.duration_seconds, 0), m.deleted_at IS NOT NULL,
-                   m.meeting_status IN ('completed', 'note_only')
+                   m.meeting_status IN ('completed', 'note_only', 'incomplete')
             FROM meetings m
             LEFT JOIN insights_record_cache c ON c.kind = 'meeting' AND c.record_id = m.id
             WHERE c.record_id IS NULL OR c.source_updated_at != m.updated_at
@@ -2811,7 +2815,8 @@ public final class DictationStore {
         selectedTemplateName: String? = nil,
         selectedTemplateKind: MeetingTemplateKind? = nil,
         selectedTemplatePrompt: String? = nil,
-        visualContext: String? = nil
+        visualContext: String? = nil,
+        transcriptionIncomplete: Bool = false
     ) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
@@ -2843,7 +2848,8 @@ public final class DictationStore {
         bindOptionalText(micAudioPath, at: 8, statement: statement)
         bindOptionalText(systemAudioPath, at: 9, statement: statement)
         bindOptionalText(savedRecordingPath, at: 10, statement: statement)
-        sqlite3_bind_text(statement, 11, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
+        let finalStatus: MeetingStatus = transcriptionIncomplete ? .incomplete : .completed
+        sqlite3_bind_text(statement, 11, (finalStatus.rawValue as NSString).utf8String, -1, nil)
         sqlite3_bind_int(statement, 12, Int32(wordCount))
         bindOptionalText(selectedTemplateID, at: 13, statement: statement)
         bindOptionalText(selectedTemplateName, at: 14, statement: statement)
@@ -2866,7 +2872,7 @@ public final class DictationStore {
         switch status {
         case .noteOnly, .failed:
             return Self.countWords(in: try manualNotesForMeeting(id: id, db: db))
-        case .recording, .processing, .completed:
+        case .recording, .processing, .completed, .incomplete:
             return nil
         }
     }

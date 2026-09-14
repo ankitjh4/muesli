@@ -17,15 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let runtimeTelemetry = TelemetryRuntimeConfiguration.current()
         let telemetryConfig = TelemetryDeck.Config(appID: runtimeTelemetry.sdkAppID)
-        telemetryConfig.analyticsDisabled = !runtimeTelemetry.isEnabled
+        // Fail closed until the saved offline preference has been loaded. The
+        // SDK can replay cached events immediately during initialize().
+        telemetryConfig.analyticsDisabled = true
+        telemetryConfig.urlSession = TelemetryTransportProtocol.makeSession()
         telemetryConfig.defaultParameters = { runtimeTelemetry.defaultParameters }
         TelemetryDeck.initialize(config: telemetryConfig)
-        if runtimeTelemetry.isEnabled {
-            TelemetryDeck.signal("app.launched")
-        }
-        // Always drain a pending marker. TelemetryDeck's global privacy gate
-        // suppresses the signal when analytics are disabled.
-        DiarizerPreloadDiagnostics().reportInterruptedAttemptIfNeeded()
 
         do {
             let runtime = try RuntimePaths.resolve()
@@ -34,6 +31,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 NSApplication.shared.applicationIconImage = image
             }
             let controller = MuesliController(runtime: runtime)
+            var wasOffline = controller.config.offlineInference
+            controller.inferenceNetworkPolicyDidChange = { offline in
+                ModelNetworkPolicy.shared.setAllowed(!offline)
+                let allowed = runtimeTelemetry.isEnabled && !offline
+                telemetryConfig.analyticsDisabled = !allowed
+                TelemetryNetworkGate.shared.setAllowed(allowed)
+                if offline {
+                    NSApplication.shared.unregisterForRemoteNotifications()
+                } else if wasOffline {
+                    NSApplication.shared.registerForRemoteNotifications()
+                }
+                wasOffline = offline
+            }
+            controller.inferenceNetworkPolicyDidChange?(controller.config.offlineInference)
+            if runtimeTelemetry.isEnabled && !controller.config.offlineInference {
+                TelemetryDeck.signal("app.launched")
+            }
+            DiarizerPreloadDiagnostics().reportInterruptedAttemptIfNeeded()
             controller.applyAppThemeAppearance()
             sparkleUpdateDelegate.appState = controller.appState
             if Self.hasConfiguredSparkleFeed {
@@ -47,7 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             self.controller = controller
             controller.start()
-            NSApplication.shared.registerForRemoteNotifications()
+            if !controller.config.offlineInference {
+                NSApplication.shared.registerForRemoteNotifications()
+            }
         } catch {
             let alert = NSAlert()
             alert.messageText = "\(AppIdentity.displayName) failed to start"
@@ -149,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         settingsItem.target = self
         appMenu.addItem(settingsItem)
         let whatsNewItem = NSMenuItem(
-            title: "What's New in Muesli",
+            title: "What's New in Muesli+",
             action: #selector(AppDelegate.showWhatsNew(_:)),
             keyEquivalent: ""
         )
@@ -272,6 +289,9 @@ final class SparkleUpdateDelegate: NSObject, SPUUpdaterDelegate, SPUStandardUser
     private var updateCycleGeneration = 0
 
     func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
+        if let config = appState?.config {
+            try BackgroundNetworkPolicy.requireOnline(config)
+        }
         updateCycleGeneration += 1
         let generation = updateCycleGeneration
         let restoreStatus = recoverableUpdateStatus(appState?.sparkleUpdateStatus ?? .idle)
@@ -431,12 +451,12 @@ final class SparkleUpdateDelegate: NSObject, SPUUpdaterDelegate, SPUStandardUser
 enum UpdateFailureGuidance {
     private static let noUpdateErrorCode = 1001
 
-    static let downloadPageURLString = "https://muesli-hq.github.io/muesli/"
+    static let downloadPageURLString = "https://github.com/ankitjh4/muesli/releases/latest"
 
     static let message = """
-    Please quit Muesli, reopen it from Applications, and try the update once more.
+    Please quit Muesli+, reopen it from Applications, and try the update once more.
 
-    If this keeps happening, download the latest DMG and replace Muesli manually. This can happen when the local updater cannot finish preparing or replacing the app.
+    If this keeps happening, download the latest DMG and replace Muesli+ manually. This can happen when the local updater cannot finish preparing or replacing the app.
     """
 
     static func isNoUpdateError(_ error: NSError) -> Bool {
