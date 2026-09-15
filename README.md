@@ -18,6 +18,12 @@ The prototype and checkpoint are not bundled with the Mac app.
 
 ### Muesli+ development preview
 
+**[Download the Apple Silicon preview installer](https://github.com/ankitjh4/muesli/releases/tag/muesli-plus-v0.8.4-preview.1)** ·
+[Release notes and known limitations](docs/release-notes/muesli-plus-0.8.4-preview.1.md)
+
+This is an **ad-hoc-signed, non-notarized debug preview**, not a production release.
+The DMG is distributed as a GitHub Release asset, not stored in Git history.
+
 This fork adds a light-first setup flow, six themes, customizable menu-bar icons,
 and compact word counts. New onboarding explains speech recognition, cleanup,
 meeting notes, and Quill separately.
@@ -25,15 +31,27 @@ meeting notes, and Quill separately.
 - **Hinglish in Roman letters:** Bodhan Flex recognizes Hindi and English, then a small local Qwen model romanizes Hindi spans while preserving English and numbers. Review names and uncommon words; this is romanization, not translation.
 - **Online or offline:** choose local or OpenRouter speech models independently for dictation and meetings, with separate text-model choices for cleanup and Quill. Offline mode requires downloaded speech and language models. OpenRouter catalogs are fetched dynamically; a saved key is not proof of a successful provider request.
 - **Your vocabulary:** describe your work during setup, generate suggestions locally or online, review them, and save selected words. The dictionary also suggests frequent terms and offers opt-in correction learning.
+- **Light-first interface:** light mode by default, six optional themes, customizable status icons, and a white drag-to-Applications installer.
+- **Menu-bar word count:** see words typed using compact k/m/b/T suffixes without decimal places.
+- **Context-aware writing:** optional focused-app context and on-device screen OCR help supply relevant text. Accessibility and Screen Recording permissions are required for their respective features. With a hosted text model, supplied context may leave the Mac; this is not background browsing or automatic note-taking.
+- **Dictation cleanup:** spelling, grammar, repeated phrases, spoken self-corrections, and dictated-list formatting through a local or hosted text model. Fresh setup defaults cleanup on, subject to model readiness. It remains switchable in this preview; mandatory cleanup is planned, not shipped. Model output still needs review.
 - **Per-app Quill styles:** save writing instructions for specific Mac apps. These apply to Quill, not ordinary dictation cleanup; browser rules cover the browser, not individual websites.
 - **Experimental English lip dictation:** native camera/video input uses a locally prepared VALLR CoreML model and local English reconstruction. No Python environment is needed at runtime. The download service is not published yet; a fresh install cannot obtain this visual model automatically. The public checkpoint lacks its trained text decoder, so suggestions are unreliable and must be reviewed. Noncommercial model terms apply.
 
-Local development builds have been compiled and tested on Apple Silicon. No
-Muesli+ release installer is published yet. Real-person lip-reading accuracy and
+Local development builds have been compiled and tested on Apple Silicon. The
+preview installer is available above. Real-person lip-reading accuracy and
 paid-provider transcription quality are not established by the automated tests.
 The two mode actions, **Use Offline Models** and **Allow Online Models**, are
 included in App Intents metadata; system Shortcuts execution still needs a
 properly development-signed build and has not been verified in the ad-hoc build.
+
+### Roadmap / work in progress — not included as finished features
+
+- Always-listening mode with explicit privacy and recording controls. Existing hands-free dictation is not always listening.
+- Better silent dictation: improve poor recognition quality and provide a supported model download.
+- Pre-emptive note-taking: suggest noteworthy material from browsed websites, with explicit opt-in and user control.
+- Remote microphones: for example, use an iPhone in the kitchen to dictate to a computer in another room. A general remote-mic workflow and Windows/PC support are not promised by this Mac preview.
+- Mandatory grammar correction and deduplication, with a defined policy for missing models, failures, latency, and offline use.
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
@@ -132,7 +150,7 @@ Live transcription is off by default. Choose Apple Speech, or download Parakeet 
 
 ### Muesli+ preview
 
-Build from source below. The fork's [Releases page](https://github.com/ankitjh4/muesli/releases) currently has no published installer; do not assume upstream Muesli binaries include these changes.
+Download the DMG from the [Muesli+ preview release](https://github.com/ankitjh4/muesli/releases/tag/muesli-plus-v0.8.4-preview.1), then drag Muesli+ into Applications. This Apple Silicon debug preview is ad-hoc signed, not notarized. Follow the release notes for permissions and known limitations. Models download separately; experimental lip-model delivery is not available yet. Upstream Muesli binaries do not include these fork changes.
 
 ### Upstream Muesli, not this fork
 

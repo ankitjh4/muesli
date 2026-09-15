@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Creates a signed DMG from the installed app bundle with a custom Finder
-# window layout (dark background, icon positions, no toolbar/sidebar).
+# window layout (light background, icon positions, no toolbar/sidebar).
 # Usage: ./scripts/create_dmg.sh [app_path] [output_dir]
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,6 +49,25 @@ TEMP_DMG="$OUTPUT_DIR/_temp_${DMG_NAME}"
 
 # Clean up any previous DMG
 rm -f "$DMG_PATH" "$TEMP_DMG"
+
+# Optional deterministic layout, useful on local Macs without Apple Events
+# permission. Install dmgbuild==1.6.5 in a packaging venv and put it on PATH.
+if [[ "${MUESLI_DMG_USE_DMGBUILD:-0}" == "1" ]]; then
+  command -v dmgbuild >/dev/null || { echo "dmgbuild is required on PATH" >&2; exit 1; }
+  python3 "$ROOT/scripts/build_dmg_layout.py" \
+    "$ROOT/scripts/local_dmg_settings.py" "$APP_PATH" \
+    "$BACKGROUND_DIR/dmg-background.png" \
+    "$APP_NAME" "$DMG_PATH"
+  if [[ "${MUESLI_DMG_LOCAL_ONLY:-0}" == "1" ]]; then
+    codesign --force --sign - "$DMG_PATH"
+    echo "Local test installer only: not Developer ID signed or notarized."
+  else
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+  fi
+  codesign --verify "$DMG_PATH"
+  echo "DMG created: $DMG_PATH"
+  exit 0
+fi
 
 echo "Creating DMG: $DMG_NAME"
 
@@ -107,7 +126,7 @@ sleep 1
 
 # Configure Finder window via AppleScript:
 #   - 1080×760pt window (full artboard size), icon size 152
-#   - Custom dark background from .background/dmg-background.png (@2x Retina at 2160×1520)
+#   - Custom light background from .background/dmg-background.png (@2x Retina at 2160×1520)
 #   - App icon at left (260, 313), Applications symlink at right (820, 313)
 #   - No toolbar, no sidebar, icon view
 #   - Bounds set 3× (before first close, after re-open, after update) to ensure it sticks
@@ -116,6 +135,7 @@ sleep 1
 # On headless CI this can fail with -1743. Treat as a non-fatal warning so
 # the release pipeline continues — the DMG is functional, just with default layout.
 if ! osascript <<APPLESCRIPT
+with timeout of 30 seconds
 tell application "Finder"
   tell disk ${APPLESCRIPT_APP_NAME}
     open
@@ -142,6 +162,7 @@ tell application "Finder"
     close
   end tell
 end tell
+end timeout
 APPLESCRIPT
 then
   echo "WARNING: Finder window configuration skipped (no GUI session or Automation permission)" >&2
@@ -171,7 +192,12 @@ hdiutil convert "$TEMP_DMG" -format UDZO -o "$DMG_PATH"
 rm -f "$TEMP_DMG"
 
 # Sign the DMG
-codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+if [[ "${MUESLI_DMG_LOCAL_ONLY:-0}" == "1" ]]; then
+  codesign --force --sign - "$DMG_PATH"
+  echo "Local test installer only: not Developer ID signed or notarized."
+else
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+fi
 
 echo "DMG created: $DMG_PATH ($(du -sh "$DMG_PATH" | cut -f1))"
-echo "Signed with: $SIGN_IDENTITY"
+codesign --verify "$DMG_PATH"

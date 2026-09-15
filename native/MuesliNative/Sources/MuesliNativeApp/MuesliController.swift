@@ -5348,6 +5348,14 @@ public final class MuesliController: NSObject {
 
     private func applyInteractionPermissionSnapshot(_ snapshot: InteractionPermissionSnapshot) {
         guard appState.interactionPermissionSnapshot != snapshot else { return }
+        // NSEvent monitors created before a TCC grant can remain local-only.
+        // Recreate them through the permission-gated paths below, rather than
+        // letting isRunning incorrectly stand in for working global access.
+        if snapshot.keyboardAccessChanged(from: appState.interactionPermissionSnapshot) {
+            hotkeyMonitor.stop()
+            computerUseHotkeyMonitor.stop()
+            quilHotkeyMonitor.stop()
+        }
         appState.interactionPermissionSnapshot = snapshot
 
         let permissions = snapshot.onboardingSnapshot

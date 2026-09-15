@@ -2,6 +2,19 @@ import Foundation
 import Testing
 @testable import MuesliNativeApp
 
+@Test func keyboardPermissionTransitionsRequireFreshEventMonitors() {
+    let denied = InteractionPermissionSnapshot(microphone: false, accessibility: false, inputMonitoring: false, screenRecording: false)
+    let accessibility = InteractionPermissionSnapshot(microphone: false, accessibility: true, inputMonitoring: false, screenRecording: false)
+    let both = InteractionPermissionSnapshot(microphone: false, accessibility: true, inputMonitoring: true, screenRecording: false)
+    let audioOnly = InteractionPermissionSnapshot(microphone: true, accessibility: false, inputMonitoring: false, screenRecording: true)
+    #expect(!denied.keyboardAccessChanged(from: nil))
+    #expect(!denied.keyboardAccessChanged(from: denied))
+    #expect(!audioOnly.keyboardAccessChanged(from: denied))
+    #expect(accessibility.keyboardAccessChanged(from: denied))
+    #expect(both.keyboardAccessChanged(from: accessibility))
+    #expect(denied.keyboardAccessChanged(from: both))
+}
+
 private final class PermissionReaderThreadProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var capturedOnMainThread = false

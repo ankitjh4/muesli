@@ -2876,6 +2876,16 @@ private struct SettingsForm: View {
 
     private var permissionsSection: some View {
         settingsSection("Permissions") {
+            if !accessibilityGranted || !inputMonitoringGranted {
+                Text("Already switched on in System Settings? Remove the old Muesli entry with the minus button, then add this copy from Applications and enable it. Quit and reopen Muesli+ afterward. Both Accessibility and Input Monitoring are needed for the global shortcut. Hold Right Option to talk; release to finish.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Show this app in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+            }
             permissionStatusRow(
                 "Microphone",
                 granted: micGranted,

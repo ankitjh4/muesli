@@ -47,7 +47,7 @@ C_SUBTEXT = (255, 255, 255, 205)       # rgba(255,255,255,0.80)
 C_OVERLAY = (255, 255, 255, 61)        # rgba(255,255,255,0.24) — divider
 
 RENDER_SCALE = 4
-APP_DISPLAY_NAME = os.environ.get("MUESLI_DMG_APP_NAME", "Muesli")
+APP_DISPLAY_NAME = os.environ.get("MUESLI_DMG_APP_NAME", "Muesli+")
 
 
 def rgba(c, a: int):
@@ -274,30 +274,18 @@ def generate():
     font_footer   = load_font(F_TEXT_SEMIBOLD, size=18 * S)
 
     # 1. Base canvas
-    img = Image.new("RGBA", (RW, RH), C_BASE)
-
-    # 2. Background glows
-    draw_glows(img, S)
-
-    # 3. Noise grain
-    add_noise(img)
+    img = Image.new("RGBA", (RW, RH), "white")
 
     # 4. Header text
     draw = ImageDraw.Draw(img)
     draw_centred(draw, f"Install {APP_DISPLAY_NAME}", font_title,
-                 46 * S, C_TEXT, RW)
-    draw_centred(draw, "Drag to Applications \U0001f4c2  \u00b7  or double-click to install",
-                 font_subtitle, 136 * S, C_SUBTEXT, RW)
+                 46 * S, "black", RW)
+    draw_centred(draw, "Drag the app into Applications to install",
+                 font_subtitle, 136 * S, "black", RW)
 
     # 5. Icon columns
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    icon_path = os.path.normpath(os.path.join(script_dir, "assets", "muesli_app_icon.png"))
-
-    icon_cy = 315 * S
-    draw_icon_column(img, cx=260 * S, cy=icon_cy, label=APP_DISPLAY_NAME,
-                     font=font_label, S=S, icon_path=icon_path)
-    draw_icon_column(img, cx=820 * S, cy=icon_cy, label="Applications",
-                     font=font_label, S=S)
+    # Finder supplies the actual draggable icons and their labels. Do not bake
+    # duplicate icons or labels into the installer background.
 
     # 6. Corkscrew arrow
     draw_arrow(img, S=S)
@@ -305,12 +293,13 @@ def generate():
     # 7. Divider
     draw = ImageDraw.Draw(img)
     draw.line([(80 * S, 490 * S), (1000 * S, 490 * S)],
-              fill=C_OVERLAY, width=1 * S)
+              fill=(210, 210, 210, 255), width=1 * S)
 
     # 8. Footer
-    footer = (f"After installing, {APP_DISPLAY_NAME} will relaunch from Applications."
-              "  You can then eject this disk.")
-    draw_centred(draw, footer, font_footer, 520 * S, C_SUBTEXT, RW)
+    footer = f"Open {APP_DISPLAY_NAME} from Applications, then eject this disk."
+    draw_centred(draw, footer, font_footer, 520 * S, "black", RW)
+    draw_centred(draw, "First launch will guide you through permissions and model setup.",
+                 font_footer, 555 * S, "black", RW)
 
     # 9. Downsample with LANCZOS and save. Keep the background referenced by
     # Finder at full point resolution, and include a Retina sibling for systems

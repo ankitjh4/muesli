@@ -8,6 +8,12 @@ struct InteractionPermissionSnapshot: Equatable, Sendable {
     let inputMonitoring: Bool
     let screenRecording: Bool
 
+    func keyboardAccessChanged(from previous: Self?) -> Bool {
+        guard let previous else { return false }
+        return accessibility != previous.accessibility
+            || inputMonitoring != previous.inputMonitoring
+    }
+
     var onboardingSnapshot: OnboardingPermissionSnapshot {
         OnboardingPermissionSnapshot(
             microphone: microphone,
